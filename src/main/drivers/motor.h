@@ -36,6 +36,7 @@ typedef enum {
     PWM_TYPE_DSHOT300,
     PWM_TYPE_DSHOT600,
     PWM_TYPE_PROSHOT1000,
+    PWM_TYPE_CASTLE_LINK,
     PWM_TYPE_DISABLED,
     PWM_TYPE_MAX
 } motorPwmProtocolTypes_e;

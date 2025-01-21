@@ -169,7 +169,7 @@ void servoInit(void)
 
         servoResolution[index] = timebase * 1e-6f;
 
-        pwmOutConfig(&servoChannel[index], timer[index], timebase, timebase / update_rate, 0, 0);
+        pwmOutConfig(&servoChannel[index], timer[index], timebase, timebase / update_rate, 0, 0, 0 /* no interrupt */);
     }
 }
 

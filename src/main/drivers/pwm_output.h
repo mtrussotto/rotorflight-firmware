@@ -56,7 +56,24 @@ extern FAST_DATA_ZERO_INIT pwmOutputPort_t motors[MAX_SUPPORTED_MOTORS];
 struct motorDevConfig_s;
 motorDevice_t *motorPwmDevInit(const struct motorDevConfig_s *motorDevConfig, uint8_t motorCount);
 
-void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion);
+void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion, uint8_t intr);
 
 pwmOutputPort_t *pwmGetMotors(void);
 bool pwmIsSynced(void);
+
+typedef struct castleTelemetry_s {
+    uint16_t generation;
+    uint16_t oneMs;
+    uint16_t battVoltage;
+    uint16_t rippleVoltage;
+    uint16_t battCurrent;
+    uint16_t throttle;
+    uint16_t outputPower;
+    uint16_t rpm;
+    uint16_t becVoltage;
+    uint16_t becCurrent;
+    uint16_t linTempOrHalfMs;
+    uint16_t ntcTempOrHalfMs;
+} __attribute__ ((__packed__)) castleTelemetry_t;
+
+void pwmGetCastleTelemetry(castleTelemetry_t* telem);

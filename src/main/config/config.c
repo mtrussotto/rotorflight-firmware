@@ -214,7 +214,8 @@ static void validateAndFixConfig(void)
         featureDisableImmediate(FEATURE_GPS);
     }
 
-    if (motorConfig()->dev.motorPwmProtocol == PWM_TYPE_STANDARD) {
+    if (motorConfig()->dev.motorPwmProtocol == PWM_TYPE_STANDARD ||
+	motorConfig()->dev.motorPwmProtocol == PWM_TYPE_CASTLE_LINK) {
         if (!motorConfig()->dev.useUnsyncedPwm) {
             motorConfigMutable()->dev.useUnsyncedPwm = true;
         }

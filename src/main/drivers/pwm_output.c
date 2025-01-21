@@ -27,10 +27,13 @@
 
 #ifdef USE_PWM_OUTPUT
 
+#include "build/atomic.h"
+#include "build/dprintf.h"
 #include "common/maths.h"
 
 #include "drivers/io.h"
 #include "drivers/motor.h"
+#include "drivers/nvic.h"
 #include "drivers/pwm_output.h"
 #include "drivers/time.h"
 #include "drivers/timer.h"
@@ -78,7 +81,212 @@ static void pwmOCConfig(TIM_TypeDef *tim, uint8_t channel, uint16_t value, uint8
 #endif
 }
 
-void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion)
+typedef struct castleInterrupt_s {
+    timerCCHandlerRec_t pwmEdgeCb;
+    pwmOutputPort_t* port;
+    const timerHardware_t* timerHardware;
+    volatile timCCR_t *ccr_hi;
+    volatile timCCR_t *ccr_lo;
+    timCCR_t nine;
+    timCCR_t val1;
+    castleTelemetry_t telem[2];
+    uint8_t whichTelem; // whichTelem = telem we are writing to.
+    uint8_t telemIndex;
+} castleInterrupt_t;
+
+static FAST_DATA_ZERO_INIT castleInterrupt_t castleState;
+
+void pwmGetCastleTelemetry(castleTelemetry_t* telem) {
+    ATOMIC_BLOCK(NVIC_PRIO_TIMER) {
+        memcpy(telem, &castleState.telem[castleState.whichTelem^1], sizeof(castleTelemetry_t));
+    }
+}
+
+// I hate you.
+static uint32_t timToLLCh(uint16_t timch) {
+    switch(timch) {
+    case TIM_CHANNEL_1:
+        return LL_TIM_CHANNEL_CH1;
+    case TIM_CHANNEL_2:
+        return LL_TIM_CHANNEL_CH2;
+    case TIM_CHANNEL_3:
+        return LL_TIM_CHANNEL_CH3;
+    case TIM_CHANNEL_4:
+        return LL_TIM_CHANNEL_CH4;
+    case TIM_CHANNEL_5:
+        return LL_TIM_CHANNEL_CH5;
+    case TIM_CHANNEL_6:
+        return LL_TIM_CHANNEL_CH6;
+    }
+    dprintf("Bad TIM channel %d\r\n", timch);
+    return 0;
+}
+
+uint32_t pinToLLPin(uint16_t pin) {
+    switch(pin) {
+    case GPIO_PIN_0:
+        return LL_GPIO_PIN_0;
+    case GPIO_PIN_1:
+        return LL_GPIO_PIN_1;
+    case GPIO_PIN_2:
+        return LL_GPIO_PIN_2;
+    case GPIO_PIN_3:
+        return LL_GPIO_PIN_3;
+    case GPIO_PIN_4:
+        return LL_GPIO_PIN_4;
+    case GPIO_PIN_5:
+        return LL_GPIO_PIN_5;
+    case GPIO_PIN_6:
+        return LL_GPIO_PIN_6;
+    case GPIO_PIN_7:
+        return LL_GPIO_PIN_7;
+    case GPIO_PIN_8:
+        return LL_GPIO_PIN_8;
+    case GPIO_PIN_9:
+        return LL_GPIO_PIN_9;
+    case GPIO_PIN_10:
+        return LL_GPIO_PIN_10;
+    case GPIO_PIN_11:
+        return LL_GPIO_PIN_11;
+    case GPIO_PIN_12:
+        return LL_GPIO_PIN_12;
+    case GPIO_PIN_13:
+        return LL_GPIO_PIN_13;
+    case GPIO_PIN_14:
+        return LL_GPIO_PIN_14;
+    case GPIO_PIN_15:
+        return LL_GPIO_PIN_15;
+    }
+    dprintf("Bad pin channel %d\r\n", pin);
+    return 0;
+}
+
+void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
+{
+    castleInterrupt_t* state = container_of(cbRec, castleInterrupt_t, pwmEdgeCb);
+    // This code makes some dubious assumptions
+    // 1) The PWM out pin is assigned to the low channel (1 or 3)
+    // 2) The high channel is available.
+    // 3) The output IRQ is the same as the input IRQ
+    // 4) Complementary channels are not enabled.
+    // This is true for the Rotorflight Nexus (TIM4, Ch1 is used for the motor
+    // and all other TIM4 channels are unassigned)
+    // May not be true for other boards.
+    // Castle uses an inverted (active low) PWM pulse and between pulses, the ESC will quickly
+    // pull the line down and then release it (they call it a 'tick').  The timing of the tick
+    // starting from the end of the PWM pulse is the telemetry value.
+    //
+    // The way the code works that as soon as the PWM pulse is done
+    // (goes high/inactive), we flip the timer output pin driver to open
+    // drain mode and freeze the output.  Then we use CCR1 to wait for
+    // 9ms from timer start.  CCR2 captures the falling edge of the
+    // 'tick'.  When CCR1 fires again, CCR2 (minus the original CCR1
+    // value) contains the telemetry value we want. (If CCR2 hasn't changed, no tick occurred)
+    //
+    //
+    // We also use CCR2 to capture the end of the PWM pulse.  We should know
+    // how long it was from CCR1, but we can't get to the real CCR1; only the
+    // preload register, which may have changed.  Yes, the MCU can measure its
+    // own outputs.
+    //
+    // The timing of the interrupts are not critical; all sensitive timing is done by the timer.
+    // The only requirements on the interrupt is the PWM-end interrupt must be serviced before 0.5ms
+    // after the end of the pulse, and the 9ms interrupt must be serviced before the next counter
+    // reset (this is at least 1ms at 100Hz).
+    //
+    // 5) Since we're running at interrupt level, no barriers are necessary.
+    //    This is more hope than anything else I'm afraid.
+
+    static int count = 52;
+    static int count2 = 52;
+    captureCompare_t saveCCR;
+    uint16_t telemVal;
+    uint16_t counter = LL_TIM_GetCounter(state->timerHardware->tim);
+    GPIO_TypeDef* gpioPort = IO_GPIO(state->port->io);
+    uint32_t gpioPin = pinToLLPin(IO_Pin(state->port->io));
+
+    uint32_t pinIsHigh = LL_GPIO_IsInputPinSet(gpioPort, gpioPin);
+    if (counter >= state->nine) {
+        // About 1 sec, but prime.
+        if (++count == 53) {
+            dprintf("PWM interrupt 1, val1 = %d, val2 = %d, capture = %d counter = %d, pin %d\r\n", state->val1, *state->ccr_hi, capture, counter, pinIsHigh);
+            count = 0;
+        }
+        telemVal = *state->ccr_hi - state->val1;
+        if (!pinIsHigh) {
+            // If the pin is low 9ms past the start of the pulse while in
+            // open-drain mode, the pull-up is not working.  Assuming the
+            // wiring is correct, the battery may be disconnected.  We
+            // should ignore any "telemetry" in this case, it's just noise.
+            // Set telemIndex to 0 to wait for a sync frame.
+            state->telemIndex = 0;
+        } else if (telemVal == 0) {
+            state->telemIndex = 1;
+        } else if (state->telemIndex > 0) {
+            ((uint16_t*)&state->telem[state->whichTelem])[state->telemIndex] = telemVal;
+            if (++state->telemIndex == 12) {
+                state->telemIndex = 0;
+                // Note the first valid telemetry generation is 1.
+                state->telem[state->whichTelem^1].generation =
+                    ++state->telem[state->whichTelem].generation;
+                dprintf("T%d %4d %4d\r\n", state->whichTelem,
+                        state->telem[state->whichTelem].linTempOrHalfMs,
+                        state->telem[state->whichTelem].oneMs);
+                state->whichTelem ^= 1;
+            }
+        }
+        // Switch to push-pull output.
+        LL_GPIO_SetPinOutputType(gpioPort, gpioPin, LL_GPIO_OUTPUT_PUSHPULL);
+        // Turn on the output
+        LL_TIM_OC_SetMode(state->timerHardware->tim, timToLLCh(state->timerHardware->channel), LL_TIM_OCMODE_PWM1);
+        // Switch the other channel back to the end-edge
+        LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_RISING);
+    } else {
+        if (++count2 == 53) {
+            dprintf("PWM interrupt, val1 = %d ccr = %d, ccrhi %d\r\n", capture, *state->ccr_lo, *state->ccr_hi);
+            count2 = 0;
+        }
+        // Save the PWM CCR value
+        saveCCR = *state->port->channel.ccr;
+        // Save the capture value
+        state->val1 = *state->ccr_hi;
+        // Freeze the output
+        LL_TIM_OC_SetMode(state->timerHardware->tim, timToLLCh(state->timerHardware->channel), LL_TIM_OCMODE_FROZEN);
+        // Switch to Open Drain.  The internal pull-ups are not nearly
+        // strong enough, so they are not used.  Instead, an external
+        // pull-up to the ESC power needs to be used.  The esc has a
+        // pull-down of 6.65k (according to spec), use a pull-up to make
+        // the resulting voltage at least as high as the MCU V_Ih value
+        // (in the datasheet), but in no case more than the MCU tolerance
+        // value for the pin.  The pin used on the Radiomaster Nexus is 5V
+        // tolerant, so 10K should work from ~4V to 8.3V for a pull-up
+        // voltage.  But MEASURE the resulting voltage BEFORE plugging it
+        // in, I disclaim any responsibility for frying your flight
+        // controller. If you're running higher BEC voltages, an 8.2k pull
+        // down (which should still work down to a BEC voltage of 5V) is much cheaper than
+        // a fried flight controller!!
+        LL_GPIO_SetPinOutputType(gpioPort, gpioPin, LL_GPIO_OUTPUT_OPENDRAIN);
+        // Set polarity to detect the falling edge of the tick.
+        LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_FALLING);
+        // Turn off preload because we expect this next one to occur in the same
+        // counting cycle.
+        LL_TIM_OC_DisablePreload(state->timerHardware->tim,
+                                 timToLLCh(state->timerHardware->channel));
+        // This timer is upcounting, so the correct new CCR value is 9ms
+        // (max 2ms pulse + wait 7ms for tick.  Max correct tick is 5.5ms
+        // (including the required 0.5ms delay), so that's plenty of
+        // margin, and still allows 100Hz (10ms cycle) operation)
+        *state->ccr_lo = state->nine;
+
+        LL_TIM_OC_EnablePreload(state->timerHardware->tim,
+                                timToLLCh(state->timerHardware->channel));
+        // Put the CCR register back for the next cycle (since preload is now on,
+        // the 9ms we just set will not be cleared.
+        *state->port->channel.ccr = saveCCR;
+    }
+}
+
+void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion, uint8_t intr)
 {
 #if defined(USE_HAL_DRIVER)
     TIM_HandleTypeDef* Handle = timerFindTimerHandle(timerHardware->tim);
@@ -87,18 +295,57 @@ void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware,
 
     configTimeBase(timerHardware->tim, period, hz);
     pwmOCConfig(timerHardware->tim,
-        timerHardware->channel,
-        value,
-        inversion ? timerHardware->output ^ TIMER_OUTPUT_INVERTED : timerHardware->output
-        );
+                timerHardware->channel,
+                value,
+                inversion ? timerHardware->output ^ TIMER_OUTPUT_INVERTED : timerHardware->output
+               );
 
 #if defined(USE_HAL_DRIVER)
-    if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL)
-        HAL_TIMEx_PWMN_Start(Handle, timerHardware->channel);
-    else
-        HAL_TIM_PWM_Start(Handle, timerHardware->channel);
+    if (intr) {
+        dprintf("Configuring PWM for interrupt, timer = %d, nchan = %d!\r\n",
+                timerGetTIMNumber(timerHardware->tim),
+                timerHardware->output & TIMER_OUTPUT_N_CHANNEL);
+
+        castleState.ccr_hi = timerChCCRHi(timerHardware);
+        castleState.ccr_lo = timerChCCRLo(timerHardware);
+        castleState.timerHardware = timerHardware;
+        {
+            float nineMs = 9e-3 * hz;
+            castleState.nine = lrintf(nineMs);
+        }
+        dprintf("Nine = %d\r\n", castleState.nine);
+        {
+            // Initialize the input capture.
+            TIM_IC_InitTypeDef icInit;
+            // Note: Castle Link is inverted.
+            icInit.ICPolarity = inversion ? TIM_ICPOLARITY_RISING : TIM_ICPOLARITY_FALLING;
+            icInit.ICSelection = TIM_ICSELECTION_INDIRECTTI; // Indirect capture
+            icInit.ICPrescaler = TIM_ICPSC_DIV1;  // Every edge
+            icInit.ICFilter = 0; // No filtering
+            HAL_TIM_IC_ConfigChannel(Handle, &icInit, timerHardware->channel ^ TIM_CHANNEL_2);
+            HAL_TIM_IC_Start(Handle, timerHardware->channel ^ TIM_CHANNEL_2);
+        }
+
+        timerChCCHandlerInit(&castleState.pwmEdgeCb, pwmEdgeCallback);
+        timerChConfigCallbacks(timerHardware, &castleState.pwmEdgeCb, NULL);
+        timerNVICConfigure(timerInputIrq(timerHardware->tim));
+
+        if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL)
+            HAL_TIMEx_PWMN_Start_IT(Handle, timerHardware->channel);
+        else
+            HAL_TIM_PWM_Start_IT(Handle, timerHardware->channel);
+    } else {
+        dprintf("Configuring PWM, nchan = %d!\r\n",
+                timerHardware->output & TIMER_OUTPUT_N_CHANNEL);
+        if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL)
+            HAL_TIMEx_PWMN_Start(Handle, timerHardware->channel);
+        else
+            HAL_TIM_PWM_Start(Handle, timerHardware->channel);
+    }
     HAL_TIM_Base_Start(Handle);
 #else
+#error "Not this, correct?"
+    assert_param(!intr);
     TIM_CtrlPWMOutputs(timerHardware->tim, ENABLE);
     TIM_Cmd(timerHardware->tim, ENABLE);
 #endif
@@ -223,6 +470,11 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         sLen = 1e-3f;
         useUnsyncedPwm = true;
         break;
+    case PWM_TYPE_CASTLE_LINK:
+        sMin = 1e-3f;
+        sLen = 1e-3f;
+        useUnsyncedPwm = true;
+        break;
     }
 
     motorPwmDevice.vTable.write = pwmWriteStandard;
@@ -247,8 +499,15 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         IOConfigGPIOAF(motors[motorIndex].io, IOCFG_AF_PP, timerHardware->alternateFunction);
 
         /* standard PWM outputs */
-        // margin of safety is 4 periods when unsynced
-        const unsigned pwmRateHz = useUnsyncedPwm ? motorConfig->motorPwmRate : ceilf(1 / ((sMin + sLen) * 4));
+        // margin of safety is 4 periods when unsynced Castle link
+        // requires 5.5ms wait for tick, after a max 2ms pulse, which
+        // implies an absolute maximum rate of about 133 Hz.  The
+        // protocol document specifies 50Hz.  This code requires at
+        // least 9ms + epsilon cycle time, so we set a maximum of
+        // 100Hz to be reasonably safe.
+        const unsigned pwmRateHz = useUnsyncedPwm ?
+                                   ((motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK) ? MIN(100, motorConfig->motorPwmRate) : motorConfig->motorPwmRate) :
+                                   ceilf(1 / ((sMin + sLen) * 4));
 
         const uint32_t clock = timerClock(timerHardware->tim);
         /* used to find the desired timer frequency for max resolution */
@@ -264,7 +523,10 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         motors[motorIndex].pulseScale = (sLen * hz) / 1000.0f;
         motors[motorIndex].pulseOffset = (sMin * hz) - (motors[motorIndex].pulseScale * 1000);
 
-        pwmOutConfig(&motors[motorIndex].channel, timerHardware, hz, period, 0, 0);
+        if (motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK) {
+            castleState.port = motors + motorIndex;
+        }
+        pwmOutConfig(&motors[motorIndex].channel, timerHardware, hz, period, 0, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /*inversion*/, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /* interrupt*/);
 
         bool timerAlreadyUsed = false;
         for (int i = 0; i < motorIndex; i++) {
