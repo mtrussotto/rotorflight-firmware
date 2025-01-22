@@ -259,12 +259,13 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
         // the resulting voltage at least as high as the MCU V_Ih value
         // (in the datasheet), but in no case more than the MCU tolerance
         // value for the pin.  The pin used on the Radiomaster Nexus is 5V
-        // tolerant, so 10K should work from ~4V to 8.3V for a pull-up
+        // tolerant, so 10K should work from 5.6V to 12.5V for a pull-up
         // voltage.  But MEASURE the resulting voltage BEFORE plugging it
         // in, I disclaim any responsibility for frying your flight
-        // controller. If you're running higher BEC voltages, an 8.2k pull
-        // down (which should still work down to a BEC voltage of 5V) is much cheaper than
-        // a fried flight controller!!
+        // controller. If you're pulling up to a higher voltage, a 15k pull-down
+        // (which should still work down to a pull-up voltage of 7.3V) is much cheaper than
+        // a fried flight controller!  If you're running very low voltages, a 6.8k resistor
+        // works from 4.5V to 9.8V.
         LL_GPIO_SetPinOutputType(gpioPort, gpioPin, LL_GPIO_OUTPUT_OPENDRAIN);
         // Set polarity to detect the falling edge of the tick.
         LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_FALLING);
