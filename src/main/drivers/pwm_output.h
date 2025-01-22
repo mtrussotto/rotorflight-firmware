@@ -76,4 +76,10 @@ typedef struct castleTelemetry_s {
     uint16_t ntcTempOrHalfMs;
 } __attribute__ ((__packed__)) castleTelemetry_t;
 
+#define CASTLE_TELEM_NFRAMES 12
+#define CASTLE_PWM_HZ_MAX 100
+#define CASTLE_PWM_PERIOD_MS_MIN 10
+#define CASTLE_PWM_HZ_MIN 50
+#define CASTLE_PWM_PERIOD_MS_MAX 20
+
 void pwmGetCastleTelemetry(castleTelemetry_t* telem);

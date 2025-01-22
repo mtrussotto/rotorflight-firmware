@@ -3455,7 +3455,9 @@ static void castleSensorProcess(timeUs_t currentTimeUs) {
   if (rawTelemetry->generation == *(uint16_t*)buffer) {
     // We expect every 12 PWM frames we'll get new data.  Max frame
     // length is 20ms for 50Hz, and we allow one frame extra.
-    checkFrameTimeout(currentTimeUs, 13 * 20 * 1000);
+    checkFrameTimeout(currentTimeUs,
+		      (CASTLE_TELEM_NFRAMES + 1) *
+		      CASTLE_PWM_PERIOD_MS_MAX * 1000);
     return;
   }
   dataUpdateUs = currentTimeUs;

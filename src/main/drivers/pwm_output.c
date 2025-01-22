@@ -90,8 +90,8 @@ typedef struct castleInterrupt_s {
     timCCR_t nine;
     timCCR_t val1;
     castleTelemetry_t telem[2];
-    uint8_t whichTelem; // whichTelem = telem we are writing to.
-    uint8_t telemIndex;
+    uint8_t whichTelem; // telem we are writing to (0 or 1).
+    uint8_t telemIndex; // where in the telem struct are we?
 } castleInterrupt_t;
 
 static FAST_DATA_ZERO_INIT castleInterrupt_t castleState;
@@ -224,7 +224,7 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
             state->telemIndex = 1;
         } else if (state->telemIndex > 0) {
             ((uint16_t*)&state->telem[state->whichTelem])[state->telemIndex] = telemVal;
-            if (++state->telemIndex == 12) {
+            if (++state->telemIndex == CASTLE_TELEM_NFRAMES) {
                 state->telemIndex = 0;
                 // Note the first valid telemetry generation is 1.
                 state->telem[state->whichTelem^1].generation =
@@ -344,7 +344,6 @@ void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware,
     }
     HAL_TIM_Base_Start(Handle);
 #else
-#error "Not this, correct?"
     assert_param(!intr);
     TIM_CtrlPWMOutputs(timerHardware->tim, ENABLE);
     TIM_Cmd(timerHardware->tim, ENABLE);
@@ -499,14 +498,15 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         IOConfigGPIOAF(motors[motorIndex].io, IOCFG_AF_PP, timerHardware->alternateFunction);
 
         /* standard PWM outputs */
-        // margin of safety is 4 periods when unsynced Castle link
-        // requires 5.5ms wait for tick, after a max 2ms pulse, which
-        // implies an absolute maximum rate of about 133 Hz.  The
-        // protocol document specifies 50Hz.  This code requires at
-        // least 9ms + epsilon cycle time, so we set a maximum of
-        // 100Hz to be reasonably safe.
+        // margin of safety is 4 periods when unsynced
+        //
+        // Castle link requires 5.5ms wait for tick, after a max 2ms
+        // pulse, which implies an absolute maximum rate of about 133
+        // Hz.  The protocol document specifies 50Hz.  This code
+        // requires at least 9ms + epsilon cycle time, so we set a
+        // maximum of 100Hz to be reasonably safe.
         const unsigned pwmRateHz = useUnsyncedPwm ?
-                                   ((motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK) ? MIN(100, motorConfig->motorPwmRate) : motorConfig->motorPwmRate) :
+                                   ((motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK) ? MIN(CASTLE_PWM_HZ_MAX, motorConfig->motorPwmRate) : motorConfig->motorPwmRate) :
                                    ceilf(1 / ((sMin + sLen) * 4));
 
         const uint32_t clock = timerClock(timerHardware->tim);
