@@ -36,7 +36,7 @@ static serialPort_t * debugSerialPort = NULL;
 
 void initDebugSerial(serialPortIdentifier_e port, uint32_t baudRate)
 {
-    debugSerialPort = openSerialPort(port, FUNCTION_DPRINTF, NULL, NULL, baudRate, MODE_TX, 0);
+    debugSerialPort = openSerialPort(port, FUNCTION_DPRINTF, NULL, NULL, baudRate, MODE_TX, SERIAL_PINSWAP);
     dprintf("\r\nDebug port ready\r\n");
 }
 
