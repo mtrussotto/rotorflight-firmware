@@ -102,26 +102,6 @@ void pwmGetCastleTelemetry(castleTelemetry_t* telem) {
     }
 }
 
-// I hate you.
-static uint32_t timToLLCh(uint16_t timch) {
-    switch(timch) {
-    case TIM_CHANNEL_1:
-        return LL_TIM_CHANNEL_CH1;
-    case TIM_CHANNEL_2:
-        return LL_TIM_CHANNEL_CH2;
-    case TIM_CHANNEL_3:
-        return LL_TIM_CHANNEL_CH3;
-    case TIM_CHANNEL_4:
-        return LL_TIM_CHANNEL_CH4;
-    case TIM_CHANNEL_5:
-        return LL_TIM_CHANNEL_CH5;
-    case TIM_CHANNEL_6:
-        return LL_TIM_CHANNEL_CH6;
-    }
-    dprintf("Bad TIM channel %d\r\n", timch);
-    return 0;
-}
-
 void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
 {
     castleInterrupt_t* state = container_of(cbRec, castleInterrupt_t, pwmEdgeCb);
@@ -207,9 +187,9 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
         }
         // Switch to push-pull output, so the falling edge of the next pulse is clean.
         LL_GPIO_SetPinOutputType(IO_GPIO(state->port->io), IO_Pin(state->port->io), LL_GPIO_OUTPUT_PUSHPULL);
-        LL_TIM_OC_SetMode(state->timerHardware->tim, timToLLCh(state->timerHardware->channel), LL_TIM_OCMODE_PWM1);
+        LL_TIM_OC_SetMode(state->timerHardware->tim, timerLLChannel(state->timerHardware->channel), LL_TIM_OCMODE_PWM1);
         // Switch the other channel back to the end-edge of the next pulse.
-        LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_RISING);
+        LL_TIM_IC_SetPolarity(state->timerHardware->tim, timerLLChannel(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_RISING);
     } else {
         if (++count2 == 53) {
             dprintf("PWM interrupt, val1 = %d ccr = %d, ccrhi %d\r\n", capture, *state->ccr_lo, *state->ccr_hi);
@@ -220,7 +200,7 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
         // Save the capture value
         state->val1 = *state->ccr_hi;
         // Freeze the output
-        LL_TIM_OC_SetMode(state->timerHardware->tim, timToLLCh(state->timerHardware->channel), LL_TIM_OCMODE_FROZEN);
+        LL_TIM_OC_SetMode(state->timerHardware->tim, timerLLChannel(state->timerHardware->channel), LL_TIM_OCMODE_FROZEN);
         // Switch to Open Drain.  The internal pull-ups are not nearly
         // strong enough, so they are not used.  Instead, an external
         // pull-up to the ESC power needs to be used.  The esc has a
@@ -237,11 +217,11 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
         // works from 4.5V to 9.8V.
         LL_GPIO_SetPinOutputType(IO_GPIO(state->port->io), IO_Pin(state->port->io), LL_GPIO_OUTPUT_OPENDRAIN);
         // Set the other channel to record the falling edge of the 'tick'.
-        LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_FALLING);
+        LL_TIM_IC_SetPolarity(state->timerHardware->tim, timerLLChannel(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_FALLING);
         // Turn off preload because we expect this next one to occur in the same
         // counting cycle.
         LL_TIM_OC_DisablePreload(state->timerHardware->tim,
-                                 timToLLCh(state->timerHardware->channel));
+                                 timerLLChannel(state->timerHardware->channel));
         // This timer is upcounting, so the correct new CCR value is 9ms
         // (max 2ms pulse + wait 7ms for tick.  Max correct tick is 5.5ms
         // (including the required 0.5ms delay), so that's plenty of
@@ -249,7 +229,7 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
         *state->ccr_lo = state->nine;
 
         LL_TIM_OC_EnablePreload(state->timerHardware->tim,
-                                timToLLCh(state->timerHardware->channel));
+                                timerLLChannel(state->timerHardware->channel));
         // Put the CCR register back for the next cycle (since preload is now on,
         // the 9ms we just set will not be cleared.
         *state->port->channel.ccr = saveCCR;

@@ -284,6 +284,8 @@ TIM_HandleTypeDef* timerFindTimerHandle(TIM_TypeDef *tim);
 HAL_StatusTypeDef TIM_DMACmd(TIM_HandleTypeDef *htim, uint32_t Channel, FunctionalState NewState);
 HAL_StatusTypeDef DMA_SetCurrDataCounter(TIM_HandleTypeDef *htim, uint32_t Channel, uint32_t *pData, uint16_t Length);
 uint16_t timerDmaIndex(uint8_t channel);
+// Gets the channel constant used by the low-level interface given the HAL channel constant.
+uint32_t timerLLChannel(uint8_t channel);
 #else
 void timerOCInit(TIM_TypeDef *tim, uint8_t channel, TIM_OCInitTypeDef *init);
 void timerOCPreloadConfig(TIM_TypeDef *tim, uint8_t channel, uint16_t preload);

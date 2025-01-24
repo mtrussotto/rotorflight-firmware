@@ -325,13 +325,7 @@ bool pwmDshotMotorHardwareConfig(const timerHardware_t *timerHardware, uint8_t m
     motor->icInitStruct.ICFilter = 2;
 #endif
 
-    uint32_t channel = 0;
-    switch (timerHardware->channel) {
-    case TIM_CHANNEL_1: channel = LL_TIM_CHANNEL_CH1; break;
-    case TIM_CHANNEL_2: channel = LL_TIM_CHANNEL_CH2; break;
-    case TIM_CHANNEL_3: channel = LL_TIM_CHANNEL_CH3; break;
-    case TIM_CHANNEL_4: channel = LL_TIM_CHANNEL_CH4; break;
-    }
+    uint32_t channel = timerLLChannel(timerHardware->channel);
     motor->llChannel = channel;
 
 #ifdef USE_DSHOT_DMAR

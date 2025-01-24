@@ -1135,6 +1135,28 @@ uint16_t timerDmaSource(uint8_t channel)
     return 0;
 }
 
+// TIM_LL_EC_CHANNEL
+uint32_t timerLLChannel(uint8_t channel) {
+    switch(channel) {
+    case TIM_CHANNEL_1:
+        return LL_TIM_CHANNEL_CH1;
+    case TIM_CHANNEL_2:
+        return LL_TIM_CHANNEL_CH2;
+    case TIM_CHANNEL_3:
+        return LL_TIM_CHANNEL_CH3;
+    case TIM_CHANNEL_4:
+        return LL_TIM_CHANNEL_CH4;
+#if CC_CHANNELS_PER_TIMER > 5
+    case TIM_CHANNEL_5:
+        return LL_TIM_CHANNEL_CH5;
+    case TIM_CHANNEL_6:
+        return LL_TIM_CHANNEL_CH6;
+#endif
+    }
+    return 0;
+}
+
+
 uint16_t timerGetPrescalerByDesiredMhz(TIM_TypeDef *tim, uint16_t mhz)
 {
     return timerGetPrescalerByDesiredHertz(tim, MHZ_TO_HZ(mhz));

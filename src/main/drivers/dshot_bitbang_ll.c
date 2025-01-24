@@ -88,12 +88,7 @@ void bbTimerChannelInit(bbPort_t *bbPort)
 {
     const timerHardware_t *timhw = bbPort->timhw;
 
-    switch (bbPort->timhw->channel) {
-    case TIM_CHANNEL_1: bbPort->llChannel = LL_TIM_CHANNEL_CH1; break;
-    case TIM_CHANNEL_2: bbPort->llChannel = LL_TIM_CHANNEL_CH2; break;
-    case TIM_CHANNEL_3: bbPort->llChannel = LL_TIM_CHANNEL_CH3; break;
-    case TIM_CHANNEL_4: bbPort->llChannel = LL_TIM_CHANNEL_CH4; break;
-    }
+    bbPort->llChannel = timerLLChannel(bbPort->timhw->channel);
 
     LL_TIM_OC_InitTypeDef ocInit;
     LL_TIM_OC_StructInit(&ocInit);
