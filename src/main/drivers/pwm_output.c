@@ -229,9 +229,20 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
                 // Note the first valid telemetry generation is 1.
                 state->telem[state->whichTelem^1].generation =
                     ++state->telem[state->whichTelem].generation;
-                dprintf("T%d %4d %4d\r\n", state->whichTelem,
+                dprintf("T%d %4d %4d %4d %4d %4d %4d %4d %4d %4d %4d %4d %4d\r\n", state->whichTelem,
+                        state->telem[state->whichTelem].generation,
+                        state->telem[state->whichTelem].oneMs,
+                        state->telem[state->whichTelem].battVoltage,
+                        state->telem[state->whichTelem].rippleVoltage,
+                        state->telem[state->whichTelem].battCurrent,
+                        state->telem[state->whichTelem].throttle,
+                        state->telem[state->whichTelem].outputPower,
+                        state->telem[state->whichTelem].rpm,
+                        state->telem[state->whichTelem].becVoltage,
+                        state->telem[state->whichTelem].becCurrent,
                         state->telem[state->whichTelem].linTempOrHalfMs,
-                        state->telem[state->whichTelem].oneMs);
+                        state->telem[state->whichTelem].ntcTempOrHalfMs
+                       );
                 state->whichTelem ^= 1;
             }
         }
