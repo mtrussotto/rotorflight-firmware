@@ -122,45 +122,6 @@ static uint32_t timToLLCh(uint16_t timch) {
     return 0;
 }
 
-uint32_t pinToLLPin(uint16_t pin) {
-    switch(pin) {
-    case GPIO_PIN_0:
-        return LL_GPIO_PIN_0;
-    case GPIO_PIN_1:
-        return LL_GPIO_PIN_1;
-    case GPIO_PIN_2:
-        return LL_GPIO_PIN_2;
-    case GPIO_PIN_3:
-        return LL_GPIO_PIN_3;
-    case GPIO_PIN_4:
-        return LL_GPIO_PIN_4;
-    case GPIO_PIN_5:
-        return LL_GPIO_PIN_5;
-    case GPIO_PIN_6:
-        return LL_GPIO_PIN_6;
-    case GPIO_PIN_7:
-        return LL_GPIO_PIN_7;
-    case GPIO_PIN_8:
-        return LL_GPIO_PIN_8;
-    case GPIO_PIN_9:
-        return LL_GPIO_PIN_9;
-    case GPIO_PIN_10:
-        return LL_GPIO_PIN_10;
-    case GPIO_PIN_11:
-        return LL_GPIO_PIN_11;
-    case GPIO_PIN_12:
-        return LL_GPIO_PIN_12;
-    case GPIO_PIN_13:
-        return LL_GPIO_PIN_13;
-    case GPIO_PIN_14:
-        return LL_GPIO_PIN_14;
-    case GPIO_PIN_15:
-        return LL_GPIO_PIN_15;
-    }
-    dprintf("Bad pin channel %d\r\n", pin);
-    return 0;
-}
-
 void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
 {
     castleInterrupt_t* state = container_of(cbRec, castleInterrupt_t, pwmEdgeCb);
@@ -202,10 +163,8 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
     captureCompare_t saveCCR;
     uint16_t telemVal;
     uint16_t counter = LL_TIM_GetCounter(state->timerHardware->tim);
-    GPIO_TypeDef* gpioPort = IO_GPIO(state->port->io);
-    uint32_t gpioPin = pinToLLPin(IO_Pin(state->port->io));
 
-    uint32_t pinIsHigh = LL_GPIO_IsInputPinSet(gpioPort, gpioPin);
+    uint32_t pinIsHigh = IORead(state->port->io);
     if (counter >= state->nine) {
         // About 1 sec, but prime.
         if (++count == 53) {
@@ -246,18 +205,17 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
                 state->whichTelem ^= 1;
             }
         }
-        // Switch to push-pull output.
-        LL_GPIO_SetPinOutputType(gpioPort, gpioPin, LL_GPIO_OUTPUT_PUSHPULL);
-        // Turn on the output
+        // Switch to push-pull output, so the falling edge of the next pulse is clean.
+        LL_GPIO_SetPinOutputType(IO_GPIO(state->port->io), IO_Pin(state->port->io), LL_GPIO_OUTPUT_PUSHPULL);
         LL_TIM_OC_SetMode(state->timerHardware->tim, timToLLCh(state->timerHardware->channel), LL_TIM_OCMODE_PWM1);
-        // Switch the other channel back to the end-edge
+        // Switch the other channel back to the end-edge of the next pulse.
         LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_RISING);
     } else {
         if (++count2 == 53) {
             dprintf("PWM interrupt, val1 = %d ccr = %d, ccrhi %d\r\n", capture, *state->ccr_lo, *state->ccr_hi);
             count2 = 0;
         }
-        // Save the PWM CCR value
+        // Save the PWM CCR value from the shadow register.
         saveCCR = *state->port->channel.ccr;
         // Save the capture value
         state->val1 = *state->ccr_hi;
@@ -277,8 +235,8 @@ void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
         // (which should still work down to a pull-up voltage of 7.3V) is much cheaper than
         // a fried flight controller!  If you're running very low voltages, a 6.8k resistor
         // works from 4.5V to 9.8V.
-        LL_GPIO_SetPinOutputType(gpioPort, gpioPin, LL_GPIO_OUTPUT_OPENDRAIN);
-        // Set polarity to detect the falling edge of the tick.
+        LL_GPIO_SetPinOutputType(IO_GPIO(state->port->io), IO_Pin(state->port->io), LL_GPIO_OUTPUT_OPENDRAIN);
+        // Set the other channel to record the falling edge of the 'tick'.
         LL_TIM_IC_SetPolarity(state->timerHardware->tim, timToLLCh(state->timerHardware->channel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_FALLING);
         // Turn off preload because we expect this next one to occur in the same
         // counting cycle.
