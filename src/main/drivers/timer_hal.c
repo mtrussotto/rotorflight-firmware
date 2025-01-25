@@ -1103,6 +1103,56 @@ void timerForceOverflow(TIM_TypeDef *tim)
     }
 }
 
+void timerEnableCCRInterrupt(TIM_TypeDef *tim, uint8_t channel) {
+    switch(channel) {
+    case TIM_CHANNEL_1:
+        LL_TIM_EnableIT_CC1(tim);
+	break;
+    case TIM_CHANNEL_2:
+        LL_TIM_EnableIT_CC2(tim);
+	break;
+    case TIM_CHANNEL_3:
+        LL_TIM_EnableIT_CC3(tim);
+	break;
+    case TIM_CHANNEL_4:
+        LL_TIM_EnableIT_CC4(tim);
+	break;
+#if CC_CHANNELS_PER_TIMER > 5
+    case TIM_CHANNEL_5:
+        LL_TIM_EnableIT_CC5(tim);
+	break;
+    case TIM_CHANNEL_6:
+        LL_TIM_EnableIT_CC6(tim);
+	break;
+#endif
+    }
+}
+
+void timerDisableCCRInterrupt(TIM_TypeDef *tim, uint8_t channel) {
+    switch(channel) {
+    case TIM_CHANNEL_1:
+        LL_TIM_DisableIT_CC1(tim);
+	break;
+    case TIM_CHANNEL_2:
+        LL_TIM_DisableIT_CC2(tim);
+	break;
+    case TIM_CHANNEL_3:
+        LL_TIM_DisableIT_CC3(tim);
+	break;
+    case TIM_CHANNEL_4:
+        LL_TIM_DisableIT_CC4(tim);
+	break;
+#if CC_CHANNELS_PER_TIMER > 5
+    case TIM_CHANNEL_5:
+        LL_TIM_DisableIT_CC5(tim);
+	break;
+    case TIM_CHANNEL_6:
+        LL_TIM_DisableIT_CC6(tim);
+	break;
+#endif
+    }
+}
+    
 // DMA_Handle_index
 uint16_t timerDmaIndex(uint8_t channel)
 {

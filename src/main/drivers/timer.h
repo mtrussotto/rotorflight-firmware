@@ -283,6 +283,8 @@ ioTag_t timerioTagGetByUsage(timerUsageFlag_e usageFlag, uint8_t index);
 TIM_HandleTypeDef* timerFindTimerHandle(TIM_TypeDef *tim);
 HAL_StatusTypeDef TIM_DMACmd(TIM_HandleTypeDef *htim, uint32_t Channel, FunctionalState NewState);
 HAL_StatusTypeDef DMA_SetCurrDataCounter(TIM_HandleTypeDef *htim, uint32_t Channel, uint32_t *pData, uint16_t Length);
+void timerEnableCCRInterrupt(TIM_TypeDef *tim, uint8_t channel);
+void timerDisableCCRInterrupt(TIM_TypeDef *tim, uint8_t channel);
 uint16_t timerDmaIndex(uint8_t channel);
 // Gets the channel constant used by the low-level interface given the HAL channel constant.
 uint32_t timerLLChannel(uint8_t channel);
