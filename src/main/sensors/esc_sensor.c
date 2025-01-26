@@ -41,6 +41,7 @@
 #include "common/maths.h"
 #include "common/utils.h"
 
+#include "drivers/castle_telemetry_decode.h"
 #include "drivers/timer.h"
 #include "drivers/motor.h"
 #include "drivers/dshot.h"
@@ -3451,7 +3452,7 @@ static void castleSensorProcess(timeUs_t currentTimeUs) {
   // buffer[0..1] holds our current generation, then the next 22 bytes hold
   // the telemetry value
   castleTelemetry_t* rawTelemetry = (castleTelemetry_t*)&buffer[2];
-  pwmGetCastleTelemetry(rawTelemetry);
+  getCastleTelemetry(rawTelemetry);
   if (rawTelemetry->generation == *(uint16_t*)buffer) {
     // We expect every 12 PWM frames we'll get new data.  Max frame
     // length is 20ms for 50Hz, and we allow one frame extra.
@@ -3548,7 +3549,7 @@ bool INIT_CODE escSensorInit(void)
     uint32_t baudrate = 0;
 
     if (motorIsCastlePWM() && (!portConfig || escSensorConfig()->protocol == ESC_SENSOR_PROTO_NONE)) {
-      dprintf("Initializing with Castle PWM");
+      dprintf("Initializing with Castle PWM\r\n");
       escSensorCommonInit();
       return true;
     }
