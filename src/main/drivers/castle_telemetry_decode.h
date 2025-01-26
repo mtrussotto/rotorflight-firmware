@@ -27,4 +27,4 @@ typedef struct castleTelemetry_s {
 #define CASTLE_PWM_PERIOD_MS_MAX 20
 
 void getCastleTelemetry(castleTelemetry_t* telem);
-bool castleInputConfig(const timerHardware_t* timerHardware, float hz);
+bool castleInputConfig(const timerHardware_t* timerHardware, uint32_t hz);

@@ -163,7 +163,7 @@ static void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture
     }
 }
 
-bool castleInputConfig(const timerHardware_t* timerHardware, float hz) {
+bool castleInputConfig(const timerHardware_t* timerHardware, uint32_t hz) {
     if (castleState.timer) {
         dprintf("Castle telemetry already configured, we only support one.\r\n");
         return false;
@@ -181,8 +181,8 @@ bool castleInputConfig(const timerHardware_t* timerHardware, float hz) {
     castleState.directChannel = timerHardware->channel;
     castleState.indirectChannel = complementChannel;
     castleState.io = IOGetByTag(timerHardware->tag);
-    float nineMs = 9e-3 * hz;
-    castleState.nine = lrintf(nineMs);
+    uint16_t nineMs = (9 * hz) / 1000;
+    castleState.nine = nineMs;
     dprintf("Nine = %d\r\n", castleState.nine);
 
     // Initialize the input capture.
