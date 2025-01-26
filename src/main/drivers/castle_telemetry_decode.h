@@ -29,4 +29,4 @@ typedef struct castleTelemetry_s {
 void getCastleTelemetry(castleTelemetry_t* telem);
 struct timerChannel_s;
 bool castleInputConfig(const timerHardware_t* timerHardware,
-		       struct timerChannel_s* timerChannel, uint32_t hz);
+                       struct timerChannel_s* timerChannel, uint32_t hz);

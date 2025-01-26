@@ -3449,22 +3449,22 @@ static void castleDecodeTeleFrame(timeUs_t currentTimeUs, castleTelemetry_t* tel
 }
 
 static void castleSensorProcess(timeUs_t currentTimeUs) {
-  // buffer[0..1] holds our current generation, then the next 22 bytes hold
-  // the telemetry value
-  castleTelemetry_t* rawTelemetry = (castleTelemetry_t*)&buffer[2];
-  getCastleTelemetry(rawTelemetry);
-  if (rawTelemetry->generation == *(uint16_t*)buffer) {
-    // We expect every 12 PWM frames we'll get new data.  Max frame
-    // length is 20ms for 50Hz, and we allow one frame extra.
-    checkFrameTimeout(currentTimeUs,
-		      (CASTLE_TELEM_NFRAMES + 1) *
-		      CASTLE_PWM_PERIOD_MS_MAX * 1000);
-    return;
-  }
-  dataUpdateUs = currentTimeUs;
-  *(uint16_t*)buffer = rawTelemetry->generation;
-  castleDecodeTeleFrame(currentTimeUs, rawTelemetry);
-  updateConsumption(currentTimeUs);
+    // buffer[0..1] holds our current generation, then the next 22 bytes hold
+    // the telemetry value
+    castleTelemetry_t* rawTelemetry = (castleTelemetry_t*)&buffer[2];
+    getCastleTelemetry(rawTelemetry);
+    if (rawTelemetry->generation == *(uint16_t*)buffer) {
+        // We expect every 12 PWM frames we'll get new data.  Max frame
+        // length is 20ms for 50Hz, and we allow one frame extra.
+        checkFrameTimeout(currentTimeUs,
+                          (CASTLE_TELEM_NFRAMES + 1) *
+                          CASTLE_PWM_PERIOD_MS_MAX * 1000);
+        return;
+    }
+    dataUpdateUs = currentTimeUs;
+    *(uint16_t*)buffer = rawTelemetry->generation;
+    castleDecodeTeleFrame(currentTimeUs, rawTelemetry);
+    updateConsumption(currentTimeUs);
 }
 
 void escSensorProcess(timeUs_t currentTimeUs)
@@ -3517,7 +3517,7 @@ void escSensorProcess(timeUs_t currentTimeUs)
         DEBUG(ESC_SENSOR_FRAME, DEBUG_FRAME_TIMEOUTS, totalTimeoutCount);
         DEBUG(ESC_SENSOR_FRAME, DEBUG_FRAME_BUFFER, readBytes);
     } else if (motorIsCastlePWM()) {
-      castleSensorProcess(currentTimeUs);
+        castleSensorProcess(currentTimeUs);
     }
 }
 
