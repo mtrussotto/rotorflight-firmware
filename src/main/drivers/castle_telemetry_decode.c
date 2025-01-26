@@ -1,5 +1,3 @@
-#include <math.h>
-
 #include "platform.h"
 
 #include "build/atomic.h"
@@ -7,19 +5,21 @@
 
 #include "drivers/castle_telemetry_decode.h"
 #include "drivers/nvic.h"
+#include "drivers/pwm_output.h"
 #include "drivers/timer.h"
 
 typedef struct castleInterrupt_s {
     timerCCHandlerRec_t pwmEdgeCb;
-    TIM_TypeDef* timer;
+    timerChannel_t* timer;
     IO_t io;
-    timCCR_t nine;
-    timCCR_t pulseEndTime;
+    timCCR_t outputEnableTime;
+    timCCR_t resetValue;
+    timCCR_t saveCCR;
     castleTelemetry_t telem[2];
     uint8_t whichTelem; // telem we are writing to (0 or 1).
     uint8_t telemIndex; // where in the telem struct are we?
     uint8_t directChannel;
-    uint8_t indirectChannel;
+    uint8_t timingChannel;
 } castleInterrupt_t;
 
 static FAST_DATA_ZERO_INIT castleInterrupt_t castleState;
@@ -28,63 +28,44 @@ void getCastleTelemetry(castleTelemetry_t* telem) {
     ATOMIC_BLOCK(NVIC_PRIO_TIMER) {
         memcpy(telem, &castleState.telem[castleState.whichTelem^1], sizeof(castleTelemetry_t));
     }
+    // We're downcounting, so the telemetry values need to be complemented.
+    for (size_t i = 1; i < (sizeof(castleTelemetry_t) >> 1); i++) {
+	((uint16_t*)telem)[i] = castleState.resetValue - ((uint16_t*)telem)[i];
+    }
 }
 
 static void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture)
 {
     castleInterrupt_t* state = container_of(cbRec, castleInterrupt_t, pwmEdgeCb);
-    // This code makes some dubious assumptions
-    // 1) The PWM out pin is assigned to the low channel (1 or 3)
-    // 2) The high channel is available.
-    // 3) The output IRQ is the same as the input IRQ
-    // 4) Complementary channels are not enabled.
-    // This is true for the Rotorflight Nexus (TIM4, Ch1 is used for the motor
-    // and all other TIM4 channels are unassigned)
-    // May not be true for other boards.
     // Castle uses an inverted (active low) PWM pulse and between pulses, the ESC will quickly
     // pull the line down and then release it (they call it a 'tick').  The timing of the tick
     // starting from the end of the PWM pulse is the telemetry value.
     //
-    // The way the code works that as soon as the PWM pulse is done
-    // (goes high/inactive), we flip the timer output pin driver to open
-    // drain mode and freeze the output.  Then we use CCR1 to wait for
-    // 9ms from timer start.  CCR2 captures the falling edge of the
-    // 'tick'.  When CCR1 fires again, CCR2 (minus the original CCR1
-    // value) contains the telemetry value we want. (If CCR2 hasn't changed, no tick occurred)
-    //
-    //
-    // We also use CCR2 to capture the end of the PWM pulse.  We should know
-    // how long it was from CCR1, but we can't get to the real CCR1; only the
-    // preload register, which may have changed.  Yes, the MCU can measure its
-    // own outputs.
-    //
     // The timing of the interrupts are not critical; all sensitive timing is done by the timer.
     // The only requirements on the interrupt is the PWM-end interrupt must be serviced before 0.5ms
-    // after the end of the pulse, and the 9ms interrupt must be serviced before the next counter
-    // reset (this is at least 1ms at 100Hz).
-    //
-    // 5) Since we're running at interrupt level, no barriers are necessary.
-    //    This is more hope than anything else I'm afraid.
+    // after the end of the pulse, and the output-on interrupt must be serviced before the next counter
+    // reset.
 
     static int count = 52;
     static int count2 = 52;
-    uint16_t counter = LL_TIM_GetCounter(state->timer);
-    uint32_t pinIsHigh = IORead(state->io);
-    if (counter >= state->nine) {
+    uint16_t counter = LL_TIM_GetCounter(state->timer->tim);
+    if (counter <= state->outputEnableTime) {
+	uint32_t pinIsHigh = IORead(state->io);
         // About 1 sec, but prime.
         if (++count == 53) {
-            dprintf("PWM interrupt 1, pulseEndTime = %d, val2 = %d, capture = %d counter = %d, pin %d\r\n", state->pulseEndTime, *timerCCR(state->timer, state->indirectChannel), capture, counter, pinIsHigh);
+            dprintf("PWM interrupt 1, tick = %d, capture = %d counter = %d, pin %d\r\n", *timerCCR(state->timer->tim, state->directChannel), capture, counter, pinIsHigh);
             count = 0;
         }
-        uint16_t telemVal = *timerCCR(state->timer, state->indirectChannel) - state->pulseEndTime;
+        uint16_t telemVal = *timerCCR(state->timer->tim, state->directChannel);
         if (!pinIsHigh) {
-            // If the pin is low 9ms past the start of the pulse while in
+            // If the pin is low at output enable time while in
             // open-drain mode, the pull-up is not working.  Assuming the
             // wiring is correct, the battery may be disconnected.  We
             // should ignore any "telemetry" in this case, it's just noise.
             // Set telemIndex to 0 to wait for a sync frame.
             state->telemIndex = 0;
-        } else if (telemVal == 0) {
+        } else if (telemVal < counter) {
+	    // No capture occurred, so this was a sync frame.
             state->telemIndex = 1;
         } else if (state->telemIndex > 0) {
             ((uint16_t*)&state->telem[state->whichTelem])[state->telemIndex] = telemVal;
@@ -110,24 +91,31 @@ static void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture
                 state->whichTelem ^= 1;
             }
         }
+        // Reconfigure the channel to generate the next PWM pulse
+	LL_TIM_CC_DisableChannel(state->timer->tim, timerLLChannel(state->directChannel));
+	LL_TIM_OC_ConfigOutput(state->timer->tim, timerLLChannel(state->directChannel), LL_TIM_OCPOLARITY_LOW | LL_TIM_OCIDLESTATE_HIGH);
+	LL_TIM_OC_SetMode(state->timer->tim, timerLLChannel(state->directChannel), LL_TIM_OCMODE_PWM1);
+	// Switch the motor control register back to the real register.
+	// This must be done before enabling preload, or the output will
+	// switch on based on the capture value.
+	state->timer->ccr = timerCCR(state->timer->tim, state->directChannel);
+	*state->timer->ccr = state->saveCCR;
+	LL_TIM_OC_EnablePreload(state->timer->tim, timerLLChannel(state->directChannel));
+	LL_TIM_CC_EnableChannel(state->timer->tim, timerLLChannel(state->directChannel));
         // Switch to push-pull output, so the falling edge of the next pulse is clean.
         LL_GPIO_SetPinOutputType(IO_GPIO(state->io), IO_Pin(state->io), LL_GPIO_OUTPUT_PUSHPULL);
-        LL_TIM_OC_SetMode(state->timer, timerLLChannel(state->directChannel), LL_TIM_OCMODE_PWM1);
-        // Switch the other channel back to the end-edge of the next pulse.
-        LL_TIM_IC_SetPolarity(state->timer, timerLLChannel(state->indirectChannel),
-                              LL_TIM_IC_POLARITY_RISING);
+	*timerCCR(state->timer->tim, state->timingChannel) = state->resetValue;
     } else {
         if (++count2 == 53) {
-            dprintf("PWM interrupt, pulseEndTime = %d ccr = %d, ccrhi %d\r\n", capture, *timerCCR(state->timer, state->directChannel), *timerCCR(state->timer, state->indirectChannel));
+            dprintf("PWM interrupt, pulseEndTime = %d ccr = %d, ccrhi %d\r\n", capture, *timerCCR(state->timer->tim, state->directChannel), *timerCCR(state->timer->tim, state->timingChannel));
             count2 = 0;
         }
-        // Save the PWM CCR value from the shadow register.
-        volatile timCCR_t* directCCR = timerCCR(state->timer, state->directChannel);
-        captureCompare_t saveCCR = *directCCR;
+        // Save the PWM CCR value from the shadow register and reconfigure
+	// motor control to point to the saveCCR field.
+        volatile timCCR_t* directCCR = timerCCR(state->timer->tim, state->directChannel);
+        state->saveCCR = *directCCR;
+	state->timer->ccr = &state->saveCCR;
 
-        // Save the capture value for the rising edge of our own output.
-        state->pulseEndTime = *timerCCR(state->timer, state->indirectChannel);
-        LL_TIM_OC_SetMode(state->timer, timerLLChannel(state->directChannel), LL_TIM_OCMODE_FROZEN);
         // Switch to Open Drain.  The internal pull-ups are not nearly
         // strong enough, so they are not used.  Instead, an external
         // pull-up to the ESC power needs to be used.  The esc has a
@@ -143,74 +131,79 @@ static void pwmEdgeCallback(timerCCHandlerRec_t *cbRec, captureCompare_t capture
         // a fried flight controller!  If you're running very low voltages, a 6.8k resistor
         // works from 4.5V to 9.8V.
         LL_GPIO_SetPinOutputType(IO_GPIO(state->io), IO_Pin(state->io), LL_GPIO_OUTPUT_OPENDRAIN);
-        // Set the other channel to record the falling edge of the 'tick'.
-        LL_TIM_IC_SetPolarity(state->timer, timerLLChannel(state->directChannel ^ TIM_CHANNEL_2), LL_TIM_IC_POLARITY_FALLING);
-        // Turn off preload because we expect this next compare value to occur in the same
-        // counting cycle.
-        LL_TIM_OC_DisablePreload(state->timer,
-                                 timerLLChannel(state->directChannel));
-        // This timer is upcounting, so the correct new CCR value is about 9ms
-        // (max 2ms pulse + wait 7ms for tick.  Max correct tick is 5.5ms
-        // (including the required 0.5ms delay), so that's plenty of
-        // margin, and still allows 100Hz (10ms cycle) operation)
-        *directCCR = state->nine;
-
-        LL_TIM_OC_EnablePreload(state->timer,
-                                timerLLChannel(state->directChannel));
-        // Put the CCR register back for the next cycle (since preload is now on,
-        // the 9ms we just set will not be cleared).
-        *directCCR = saveCCR;
+	
+        // Reconfigure the channel to record the falling edge of the
+	// 'tick'.  We do not need to take an interrupt on capture; we
+	// can record the edge when the interrupt to turn on output
+	// happens.
+	LL_TIM_CC_DisableChannel(state->timer->tim, timerLLChannel(state->directChannel));
+	LL_TIM_IC_Config(state->timer->tim, timerLLChannel(state->directChannel), LL_TIM_ACTIVEINPUT_DIRECTTI | LL_TIM_ICPSC_DIV1 | LL_TIM_IC_FILTER_FDIV1 | LL_TIM_IC_POLARITY_FALLING);
+	LL_TIM_CC_EnableChannel(state->timer->tim, timerLLChannel(state->directChannel));
+	*timerCCR(state->timer->tim, state->timingChannel) = state->outputEnableTime;
     }
 }
 
-bool castleInputConfig(const timerHardware_t* timerHardware, float hz) {
+// Assumes timer is already set up for output.
+bool castleInputConfig(const timerHardware_t* timerHardware,
+		       timerChannel_t* timerChannel,
+		       uint32_t hz) {
+    TIM_HandleTypeDef* Handle = timerFindTimerHandle(timerHardware->tim);
+    if (Handle == NULL)
+	return false;
+    
     if (castleState.timer) {
         dprintf("Castle telemetry already configured, we only support one.\r\n");
         return false;
     }
-    uint8_t complementChannel = timerHardware->channel ^ TIM_CHANNEL_2;
-    if (timerGetConfiguredByNumberAndChannel(timerGetTIMNumber(timerHardware->tim),
-                                             complementChannel)) {
-        dprintf("Castle telemetry complementary channel is configured, thus unavailable: TIM%d, CH%d\r\n",
-                timerHardware->tim, complementChannel);
+    // Find an unassigned capture/compare register.
+    uint8_t timingChannel = 0xFF;
+    for (int8_t channelIndex = CC_CHANNELS_PER_TIMER - 1; channelIndex > 0; channelIndex--) {
+	uint8_t channel = CC_CHANNEL_FROM_INDEX(channelIndex);
+	if (!timerGetConfiguredByNumberAndChannel(timerGetTIMNumber(timerHardware->tim),
+						  channel)) {
+	    timingChannel = channel;
+	    break;
+	}
+    }
+    if (timingChannel == 0xFF) {
+        dprintf("No channels are unassigned (available) on the motor timer: TIM%d\r\n",
+                timerGetTIMNumber(timerHardware->tim));
         return false;
     }
-    dprintf("Configuring input for Castle telemetry, timer = %d, chans = %d, %d!\r\n",
-            timerGetTIMNumber(timerHardware->tim), timerHardware->channel, complementChannel);
-    castleState.timer = timerHardware->tim;
+    dprintf("Configuring input for Castle telemetry, TIM%d, chans = %d, %d!\r\n",
+            timerGetTIMNumber(timerHardware->tim), CC_INDEX_FROM_CHANNEL(timerHardware->channel), CC_INDEX_FROM_CHANNEL(timingChannel));
+    castleState.timer = timerChannel;
     castleState.directChannel = timerHardware->channel;
-    castleState.indirectChannel = complementChannel;
+    castleState.timingChannel = timingChannel;
     castleState.io = IOGetByTag(timerHardware->tag);
-    float nineMs = 9e-3 * hz;
-    castleState.nine = lrintf(nineMs);
-    dprintf("Nine = %d\r\n", castleState.nine);
+    // We set an interrupt to turn on the output 3ms before timer
+    // reset.  Since the pulse is right-edge-aligned and the maximum
+    // width is 2ms, that gives us 1ms to turn it on.
+    uint16_t threeMs = (3 * hz) / 1000;
+    castleState.outputEnableTime = threeMs;
+    castleState.resetValue = __HAL_TIM_GET_AUTORELOAD(Handle);
+    dprintf("threeMs = %d\r\n", castleState.outputEnableTime);
 
-    // Initialize the input capture.
-    TIM_HandleTypeDef* Handle = timerFindTimerHandle(timerHardware->tim);
-    if (Handle == NULL)
-	return false;
-    TIM_IC_InitTypeDef icInit;
-    // Note: Castle Link is inverted.
-    icInit.ICPolarity =  TIM_ICPOLARITY_RISING;
-    icInit.ICSelection = TIM_ICSELECTION_INDIRECTTI; // Indirect capture
-    icInit.ICPrescaler = TIM_ICPSC_DIV1;  // Every edge
-    icInit.ICFilter = 0; // No filtering
-    HAL_TIM_IC_ConfigChannel(Handle, &icInit, complementChannel);
-    HAL_TIM_IC_Start(Handle, complementChannel);
+    // Initialize the timer compare register for when to turn off the output.
+    TIM_OC_InitTypeDef TIM_OCInitStructure;
+    // Initialize the other channel for timing.
+    TIM_OCInitStructure.OCMode = TIM_OCMODE_TIMING;
+    TIM_OCInitStructure.Pulse = castleState.resetValue;
+	    
+    TIM_OCInitStructure.OCIdleState = TIM_OCIDLESTATE_SET;
+    TIM_OCInitStructure.OCPolarity = TIM_OCPOLARITY_LOW;
+    TIM_OCInitStructure.OCNIdleState = TIM_OCNIDLESTATE_SET;
+    TIM_OCInitStructure.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+    TIM_OCInitStructure.OCFastMode = TIM_OCFAST_DISABLE;
+    HAL_TIM_OC_ConfigChannel(Handle, &TIM_OCInitStructure, timingChannel);
 
-    // Configure interrupts.  These occur on the direct channel.
+    // Configure interrupts on the timing channel.  The main channel
+    // does not need interrupts.
+    timerHardware_t otherHardware = *timerHardware;
+    otherHardware.channel = timingChannel;
     timerChCCHandlerInit(&castleState.pwmEdgeCb, pwmEdgeCallback);
-    timerChConfigCallbacks(timerHardware, &castleState.pwmEdgeCb, NULL);
+    timerChConfigCallbacks(&otherHardware, &castleState.pwmEdgeCb, NULL);
     timerNVICConfigure(timerInputIrq(timerHardware->tim));
-
-    // Restart output in interrupt mode.
-    if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL) {
-	HAL_TIMEx_PWMN_Stop(Handle, timerHardware->channel);
-	HAL_TIMEx_PWMN_Start_IT(Handle, timerHardware->channel);
-    }
-    else {
-	HAL_TIM_PWM_Stop(Handle, timerHardware->channel);
-	HAL_TIM_PWM_Start_IT(Handle, timerHardware->channel);
-    }
+    HAL_TIM_OC_Start_IT(Handle, otherHardware.channel);
     return true;
 }

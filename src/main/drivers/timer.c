@@ -320,7 +320,7 @@ void timerNVICConfigure(uint8_t irq)
     NVIC_Init(&NVIC_InitStructure);
 }
 
-void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz)
+void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz, bool down)
 {
     TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
 
@@ -332,7 +332,7 @@ void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz)
     TIM_TimeBaseStructure.TIM_Prescaler = (timerClock(tim) / hz) - 1;
 
     TIM_TimeBaseStructure.TIM_ClockDivision = 0;
-    TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseStructure.TIM_CounterMode = down ? TIM_CounterMode_Down : TIM_CounterMode_Up;
     TIM_TimeBaseInit(tim, &TIM_TimeBaseStructure);
 }
 

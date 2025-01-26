@@ -37,7 +37,7 @@
 
 struct timerHardware_s;
 
-typedef struct {
+typedef struct timerChannel_s {
     volatile timCCR_t *ccr;
     TIM_TypeDef       *tim;
 } timerChannel_t;
@@ -56,7 +56,7 @@ extern FAST_DATA_ZERO_INIT pwmOutputPort_t motors[MAX_SUPPORTED_MOTORS];
 struct motorDevConfig_s;
 motorDevice_t *motorPwmDevInit(const struct motorDevConfig_s *motorDevConfig, uint8_t motorCount);
 
-void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion, uint8_t intr);
+void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion, uint8_t edge);
 
 pwmOutputPort_t *pwmGetMotors(void);
 bool pwmIsSynced(void);

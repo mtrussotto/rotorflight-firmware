@@ -79,14 +79,14 @@ static void pwmOCConfig(TIM_TypeDef *tim, uint8_t channel, uint16_t value, uint8
 #endif
 }
 
-void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion, uint8_t intr)
+void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware, uint32_t hz, uint16_t period, uint16_t value, uint8_t inversion, uint8_t edge)
 {
 #if defined(USE_HAL_DRIVER)
     TIM_HandleTypeDef* Handle = timerFindTimerHandle(timerHardware->tim);
     if (Handle == NULL) return;
 #endif
 
-    configTimeBase(timerHardware->tim, period, hz);
+    configTimeBase(timerHardware->tim, period, hz, edge /* down if edge is set */);
     pwmOCConfig(timerHardware->tim,
         timerHardware->channel,
         value,
@@ -94,21 +94,13 @@ void pwmOutConfig(timerChannel_t *channel, const timerHardware_t *timerHardware,
         );
 
 #if defined(USE_HAL_DRIVER)
-    if (intr) {
-        if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL)
-            HAL_TIMEx_PWMN_Start_IT(Handle, timerHardware->channel);
-        else
-            HAL_TIM_PWM_Start_IT(Handle, timerHardware->channel);
-    } else {
-        if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL)
-            HAL_TIMEx_PWMN_Start(Handle, timerHardware->channel);
-        else
-            HAL_TIM_PWM_Start(Handle, timerHardware->channel);
-    }
+    if (timerHardware->output & TIMER_OUTPUT_N_CHANNEL)
+	HAL_TIMEx_PWMN_Start(Handle, timerHardware->channel);
+    else
+	HAL_TIM_PWM_Start(Handle, timerHardware->channel);
     HAL_TIM_Base_Start(Handle);
 #else
     TIM_CtrlPWMOutputs(timerHardware->tim, ENABLE);
-    timerChITConfig(timerHardware->tim, intr ? ENABLE : DISABLE);
     TIM_Cmd(timerHardware->tim, ENABLE);
 #endif
 
@@ -286,9 +278,9 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         motors[motorIndex].pulseScale = (sLen * hz) / 1000.0f;
         motors[motorIndex].pulseOffset = (sMin * hz) - (motors[motorIndex].pulseScale * 1000);
 
-        pwmOutConfig(&motors[motorIndex].channel, timerHardware, hz, period, 0, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /*inversion*/, 0);
+        pwmOutConfig(&motors[motorIndex].channel, timerHardware, hz, period, 0, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /*inversion*/, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /* edge */);
 	if (motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK) {
-            castleInputConfig(timerHardware, hz);
+	    castleInputConfig(timerHardware, &motors[motorIndex].channel, hz);
         }
 
         bool timerAlreadyUsed = false;

@@ -258,7 +258,7 @@ void timerConfigUpdateCallback(const TIM_TypeDef *tim, timerOvrHandlerRec_t *upd
 
 uint32_t timerClock(TIM_TypeDef *tim);
 
-void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz);  // TODO - just for migration
+void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz, bool down);  // TODO - just for migration
 void timerReconfigureTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz);
 void timerNVICConfigure(uint8_t irq);
 

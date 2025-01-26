@@ -355,7 +355,7 @@ void timerReconfigureTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz)
     TIM_Base_SetConfig(handle->Instance, &handle->Init);
 }
 
-void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz)
+void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz, bool down)
 {
     TIM_HandleTypeDef* handle = timerFindTimerHandle(tim);
     if (handle == NULL) return;
@@ -371,7 +371,7 @@ void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz)
     handle->Init.Prescaler = (timerClock(tim) / hz) - 1;
 
     handle->Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-    handle->Init.CounterMode = TIM_COUNTERMODE_UP;
+    handle->Init.CounterMode = down ? TIM_COUNTERMODE_DOWN : TIM_COUNTERMODE_UP;
     handle->Init.RepetitionCounter = 0x0000;
 
     HAL_TIM_Base_Init(handle);
@@ -405,7 +405,7 @@ void timerConfigure(const timerHardware_t *timerHardwarePtr, uint16_t period, ui
         return;
     }
 
-    configTimeBase(timerHardwarePtr->tim, period, hz);
+    configTimeBase(timerHardwarePtr->tim, period, hz, 0);
     HAL_TIM_Base_Start(&timerHandle[timerIndex].Handle);
 
     uint8_t irq = timerInputIrq(timerHardwarePtr->tim);
@@ -452,7 +452,7 @@ void timerChInit(const timerHardware_t *timHw, channelType_t type, int irqPriori
         return;
     if (irqPriority < timerInfo[timer].priority) {
         // it would be better to set priority in the end, but current startup sequence is not ready
-        configTimeBase(usedTimers[timer], 0, 1);
+        configTimeBase(usedTimers[timer], 0, 1, 0);
         HAL_TIM_Base_Start(&timerHandle[timerIndex].Handle);
 
         HAL_NVIC_SetPriority(irq, NVIC_PRIORITY_BASE(irqPriority), NVIC_PRIORITY_SUB(irqPriority));
@@ -1069,7 +1069,7 @@ void timerStart(void)
             }
         }
         // TODO - aggregate required timer paramaters
-        configTimeBase(usedTimers[timer], 0, 1);
+        configTimeBase(usedTimers[timer], 0, 1, 0);
         TIM_Cmd(usedTimers[timer], ENABLE);
         if (priority >= 0) {  // maybe none of the channels was configured
             NVIC_InitTypeDef NVIC_InitStructure;
@@ -1146,7 +1146,7 @@ uint32_t timerLLChannel(uint8_t channel) {
         return LL_TIM_CHANNEL_CH3;
     case TIM_CHANNEL_4:
         return LL_TIM_CHANNEL_CH4;
-#if CC_CHANNELS_PER_TIMER > 5
+#ifdef TIM_CHANNEL_6
     case TIM_CHANNEL_5:
         return LL_TIM_CHANNEL_CH5;
     case TIM_CHANNEL_6:
