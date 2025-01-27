@@ -339,7 +339,7 @@ void configTimeBase(TIM_TypeDef *tim, uint16_t period, uint32_t hz, bool down)
 // old interface for PWM inputs. It should be replaced
 void timerConfigure(const timerHardware_t *timerHardwarePtr, uint16_t period, uint32_t hz)
 {
-    configTimeBase(timerHardwarePtr->tim, period, hz);
+    configTimeBase(timerHardwarePtr->tim, period, hz, 0);
     TIM_Cmd(timerHardwarePtr->tim, ENABLE);
 
     uint8_t irq = timerInputIrq(timerHardwarePtr->tim);
@@ -373,7 +373,7 @@ void timerChInit(const timerHardware_t *timHw, channelType_t type, int irqPriori
         return;
     if (irqPriority < timerInfo[timer].priority) {
         // it would be better to set priority in the end, but current startup sequence is not ready
-        configTimeBase(usedTimers[timer], 0, 1);
+        configTimeBase(usedTimers[timer], 0, 1, 0);
         TIM_Cmd(usedTimers[timer],  ENABLE);
 
         NVIC_InitTypeDef NVIC_InitStructure;
@@ -862,7 +862,7 @@ void timerStart(void)
                 irq = TIMER_HARDWARE[hwc].irq;
             }
         // TODO - aggregate required timer parameters
-        configTimeBase(usedTimers[timer], 0, 1);
+        configTimeBase(usedTimers[timer], 0, 1, 0);
         TIM_Cmd(usedTimers[timer],  ENABLE);
         if (priority >= 0) {  // maybe none of the channels was configured
             NVIC_InitTypeDef NVIC_InitStructure;

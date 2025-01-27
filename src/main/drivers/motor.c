@@ -147,7 +147,9 @@ bool checkMotorProtocolEnabled(const motorDevConfig_t *motorDevConfig)
     case PWM_TYPE_DSHOT600:
     case PWM_TYPE_PROSHOT1000:
 #endif
+#ifdef USE_TELEMETRY_CASTLE
     case PWM_TYPE_CASTLE_LINK:
+#endif
         return true;
     }
     return false;

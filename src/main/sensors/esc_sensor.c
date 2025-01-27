@@ -41,7 +41,9 @@
 #include "common/maths.h"
 #include "common/utils.h"
 
+#ifdef USE_TELEMETRY_CASTLE
 #include "drivers/castle_telemetry_decode.h"
+#endif
 #include "drivers/timer.h"
 #include "drivers/motor.h"
 #include "drivers/dshot.h"
@@ -208,10 +210,12 @@ escSensorData_t * getEscSensorData(uint8_t motorNumber)
 {
     if (getMotorCount() > 0 && featureIsEnabled(FEATURE_ESC_SENSOR)) {
         if (escSensorConfig()->protocol == ESC_SENSOR_PROTO_NONE) {
+#ifdef USE_TELEMETRY_CASTLE
             if (motorIsCastlePWM()) {
                 if (motorNumber == 0 || motorNumber == ESC_SENSOR_COMBINED)
                     return &escSensorData[0];
             }
+#endif
             dprintf("No telem");
             return NULL;
         }
@@ -3372,6 +3376,7 @@ static void recordSensorProcess(timeUs_t currentTimeUs)
 #define CASTLE_DECODE(tele, item, scale, cal0p5) \
     CASTLE_DECODE_1(tele, item, CASTLE_##scale##_SCALE, cal0p5)
 
+#ifdef USE_TELEMETRY_CASTLE
 static float castleDecodeTemperature(castleTelemetry_t* tele) {
     if (tele->linTempOrHalfMs < tele->ntcTempOrHalfMs) {
         float value = CASTLE_DECODE(tele, ntcTempOrHalfMs, NTC_TEMP, tele->linTempOrHalfMs);
@@ -3466,6 +3471,7 @@ static void castleSensorProcess(timeUs_t currentTimeUs) {
     castleDecodeTeleFrame(currentTimeUs, rawTelemetry);
     updateConsumption(currentTimeUs);
 }
+#endif // USE_TELEMETRY_CASTLE
 
 void escSensorProcess(timeUs_t currentTimeUs)
 {
@@ -3516,8 +3522,10 @@ void escSensorProcess(timeUs_t currentTimeUs)
         DEBUG(ESC_SENSOR_FRAME, DEBUG_FRAME_CRC_ERRORS, totalCrcErrorCount);
         DEBUG(ESC_SENSOR_FRAME, DEBUG_FRAME_TIMEOUTS, totalTimeoutCount);
         DEBUG(ESC_SENSOR_FRAME, DEBUG_FRAME_BUFFER, readBytes);
+#ifdef USE_TELEMETRY_CASTLE
     } else if (motorIsCastlePWM()) {
         castleSensorProcess(currentTimeUs);
+#endif
     }
 }
 

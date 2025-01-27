@@ -113,7 +113,7 @@ void cameraControlInit(void)
 
         IOConfigGPIOAF(cameraControlRuntime.io, IOCFG_AF_PP, timerHardware->alternateFunction);
 
-        pwmOutConfig(&cameraControlRuntime.channel, timerHardware, timerClock(TIM6), CAMERA_CONTROL_PWM_RESOLUTION, 0, cameraControlRuntime.inverted);
+        pwmOutConfig(&cameraControlRuntime.channel, timerHardware, timerClock(TIM6), CAMERA_CONTROL_PWM_RESOLUTION, 0, cameraControlRuntime.inverted, 0);
 
         cameraControlRuntime.period = CAMERA_CONTROL_PWM_RESOLUTION;
         *cameraControlRuntime.channel.ccr = cameraControlRuntime.period;

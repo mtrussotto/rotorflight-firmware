@@ -224,11 +224,13 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         sLen = 1e-3f;
         useUnsyncedPwm = true;
         break;
+#ifdef USE_TELEMETRY_CASTLE
     case PWM_TYPE_CASTLE_LINK:
         sMin = 1e-3f;
         sLen = 1e-3f;
         useUnsyncedPwm = true;
         break;
+#endif
     }
 
     motorPwmDevice.vTable.write = pwmWriteStandard;
@@ -279,9 +281,11 @@ motorDevice_t *motorPwmDevInit(const motorDevConfig_t *motorConfig, uint8_t moto
         motors[motorIndex].pulseOffset = (sMin * hz) - (motors[motorIndex].pulseScale * 1000);
 
         pwmOutConfig(&motors[motorIndex].channel, timerHardware, hz, period, 0, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /*inversion*/, motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK /* edge */);
+#ifdef USE_TELEMETRY_CASTLE
 	if (motorConfig->motorPwmProtocol == PWM_TYPE_CASTLE_LINK) {
 	    castleInputConfig(timerHardware, &motors[motorIndex].channel, hz);
         }
+#endif
 
         bool timerAlreadyUsed = false;
         for (int i = 0; i < motorIndex; i++) {

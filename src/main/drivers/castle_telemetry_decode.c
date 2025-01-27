@@ -1,5 +1,7 @@
 #include "platform.h"
 
+#ifdef USE_TELEMETRY_CASTLE
+
 #include "build/atomic.h"
 #include "build/dprintf.h"
 
@@ -207,3 +209,5 @@ bool castleInputConfig(const timerHardware_t* timerHardware,
     HAL_TIM_OC_Start_IT(Handle, otherHardware.channel);
     return true;
 }
+
+#endif // USE_TELEMETRY_CASTLE
