@@ -46,6 +46,7 @@ typedef struct {
     uint8_t     protocol;               // ESC telemetry protocol
     uint8_t     halfDuplex;             // Set to false to listen on the TX pin for telemetry data
     uint8_t     pinSwap;                // Swap rx and tx pins around compared to the resource settings
+    uint8_t     inverted;               // Invert mark and space on the serial port.
     uint16_t    update_hz;              // Update frequency
     uint16_t    current_offset;         // Offset (extra current) consumed by the VTX / cam (mA)
     uint16_t    hw4_current_offset;     // HobbyWing V4 raw current offset

@@ -3405,7 +3405,8 @@ bool INIT_CODE escSensorInit(void)
         return false;
     }
 
-    options = SERIAL_STOPBITS_1 | SERIAL_PARITY_NO | SERIAL_NOT_INVERTED |
+    options = SERIAL_STOPBITS_1 | SERIAL_PARITY_NO |
+	(escSensorConfig()->inverted ? SERIAL_INVERTED : SERIAL_NOT_INVERTED) |
         (escHalfDuplex ? SERIAL_BIDIR : SERIAL_UNIDIR) |
         (escSensorConfig()->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP);
 
