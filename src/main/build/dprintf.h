@@ -28,7 +28,7 @@
  * The dprintfs should be used only in debugging, and must _NOT_
  * be left in the final code!
  */
-//#define USE_SERIAL_DPRINTF
+#define USE_SERIAL_DPRINTF
 
 #ifdef USE_SERIAL_DPRINTF
 

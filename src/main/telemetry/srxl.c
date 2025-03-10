@@ -27,6 +27,7 @@
 #if defined(USE_TELEMETRY_SRXL)
 
 #include "build/version.h"
+#include "build/dprintf.h"
 
 #include "cms/cms.h"
 
@@ -50,6 +51,7 @@
 #include "io/gps.h"
 #include "io/serial.h"
 #include "io/vtx_smartaudio.h"
+#undef dprintf
 #include "io/vtx_tramp.h"
 
 #include "pg/rx.h"
@@ -227,6 +229,7 @@ bool srxlFrameRpm(sbuf_t *dst, timeUs_t currentTimeUs)
     sbufFill(dst, STRU_TELE_RPM_EMPTY_FIELDS_VALUE, STRU_TELE_RPM_EMPTY_FIELDS_COUNT);
 
     // Mandatory frame, send it unconditionally.
+    dprintf("Sending RPM frame\r\n");
     return true;
 }
 
@@ -450,8 +453,10 @@ bool srxlFrameFlightPackCurrent(sbuf_t *dst, timeUs_t currentTimeUs)
         sentAmps = amps;
         sentMah = mah;
         lastTimeSentFPmAh = currentTimeUs;
+	dprintf("Sending Flight Pack frame\r\n");
         return true;
     }
+    dprintf("Not sending Flight Pack frame\r\n");
     return false;
 }
 
@@ -723,6 +728,7 @@ static void processSrxl(timeUs_t currentTimeUs)
     sbuf_t *dst = &srxlPayloadBuf;
     srxlScheduleFnPtr srxlFnPtr;
 
+    dprintf("Request for SRXL telemetry index %d\r\n", srxlScheduleIndex);
     if (srxlScheduleIndex < SRXL_SCHEDULE_MANDATORY_COUNT) {
         srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex];
     } else {
@@ -735,6 +741,7 @@ static void processSrxl(timeUs_t currentTimeUs)
         if (cmsInMenu &&
             (pCurrentDisplay == &srxlDisplayPort)) {
             srxlFnPtr = srxlFrameText;
+	    dprintf("Forcing SRXL text\r\n");
         }
 #endif
 
@@ -789,6 +796,8 @@ bool checkSrxlTelemetryState(void)
  */
 void handleSrxlTelemetry(timeUs_t currentTimeUs)
 {
+    dprintf("HandleSrxlTelemetry: %d %d\r\n",
+	    srxl2, srxl2TelemetryRequested());
   if (srxl2) {
 #if defined(USE_SERIALRX_SRXL2)
       if (srxl2TelemetryRequested()) {
