@@ -82,6 +82,7 @@
 #define SRXL_FRAMETYPE_SID          0x00
 #define SRXL_FRAMETYPE_GPS_LOC      0x16   // GPS Location Data (Eagle Tree)
 #define SRXL_FRAMETYPE_GPS_STAT     0x17
+#define SRXL_FRAMETYPE_TELE_ESC     0x20
 
 static bool srxlTelemetryEnabled;
 static bool srxl2 = false;
@@ -460,6 +461,105 @@ bool srxlFrameFlightPackCurrent(sbuf_t *dst, timeUs_t currentTimeUs)
     return false;
 }
 
+#define SPEKTRUM_ESC_AMPS_UNUSED 0xffff
+#define SPEKTRUM_BEC_AMPS_UNUSED 0xff
+#define SPEKTRUM_BEC_VOLTS_UNUSED 0xff
+
+static uint16_t convertEscCurrent(uint32_t current) {
+    uint16_t outCurrent = (uint16_t)((current+5)/10);
+    // Assume small values are noise and large values are nonsense.
+    if (current < 10 || current > 655340) {
+	outCurrent = SPEKTRUM_ESC_AMPS_UNUSED;
+    }
+    return outCurrent;
+}
+
+static uint8_t convertBecCurrent(uint32_t current) {
+    uint8_t outCurrent = (uint16_t)((current+50)/100);
+    // Assume small values are noise and large values are nonsense.
+    if (current < 10 || current > 655340) {
+	outCurrent = SPEKTRUM_BEC_AMPS_UNUSED;
+    }
+    return outCurrent;
+}
+
+static uint16_t convertTemp(int16_t temp) {
+    uint16_t outTemp;
+    // Most temperature sensors can't read above 150º C, and if you're flying with your
+    // heli cold-soaked to below -40, telemetry is the least of your problems.
+    if (temp < -400 || temp > 1500) {
+	outTemp = SPEKTRUM_TEMP_UNUSED;
+    } else if (temp < 0) {
+	// Spektrum doesn't support negative temperatures.
+	outTemp = 0;
+    } else {
+	outTemp = (uint16_t)temp;
+    }
+    return outTemp;
+}
+
+static uint8_t getBecVolts(escSensorData_t *escSensorData) {
+    // Assume anything below 500mV is noise.  Anything above 12.7V is not representable.
+    // (Maybe use powerbox frame if using a very high voltage BEC?)
+    uint8_t becVolts = SPEKTRUM_BEC_VOLTS_UNUSED;
+    if (escSensorData->bec_voltage >= 500 && escSensorData->bec_voltage <= 12724) {
+	becVolts = (escSensorData->bec_voltage + 25) / 50;
+    } else {
+	voltageMeter_t meter;
+	if (voltageMeterRead(VOLTAGE_METER_ID_BEC, &meter)) {
+	    if (meter.voltage >= 500 && meter.voltage <= 12724) {
+		becVolts = (meter.voltage + 25) / 50;
+	    }
+	}
+    }
+    return becVolts;
+}
+
+#define ESC_KEEPALIVE_TIME_OUT 2000000 // 2s
+static bool srxlFrameEsc(sbuf_t *dst, timeUs_t currentTimeUs)
+{
+    if (!featureIsEnabled(FEATURE_ESC_SENSOR)) {
+	dprintf("Not sending ESC frame because the feature is disabled\r\n");
+	return false;
+    }
+
+    static uint32_t sentErpm;
+    static uint32_t sentVolts;
+    static timeUs_t lastTimeSentEscTele = 0;
+    timeUs_t keepAlive = currentTimeUs - lastTimeSentEscTele;
+
+    escSensorData_t* escSensorData = getEscSensorData(ESC_SENSOR_COMBINED);
+    escSensorData_t* escSensorData0 = getEscSensorData(0);
+    if ( escSensorData->age < ESC_DATA_INVALID &&
+	 (escSensorData->erpm != sentErpm ||
+	  escSensorData->voltage != sentVolts ||
+	  keepAlive > ESC_KEEPALIVE_TIME_OUT )) {
+	uint8_t throttle = (escSensorData->throttle + 2) / 5;
+	uint8_t power = (escSensorData->pwm + 2) / 5;
+        sbufWriteU8(dst, SRXL_FRAMETYPE_TELE_ESC);
+        sbufWriteU8(dst, SRXL_FRAMETYPE_SID);
+	// Assume ESCs always have RPM and input voltage.
+        sbufWriteU16BigEndian(dst, (escSensorData->erpm + 5) / 10);
+        sbufWriteU16BigEndian(dst, (escSensorData->voltage + 5) / 10);
+        sbufWriteU16BigEndian(dst, convertTemp(escSensorData->temperature));
+        sbufWriteU16BigEndian(dst, convertEscCurrent(escSensorData->current));
+        sbufWriteU16BigEndian(dst, convertTemp(escSensorData0->temperature2)); // BEC temperature
+        sbufWriteU8(dst, convertBecCurrent(escSensorData0->bec_current));
+        sbufWriteU8(dst, getBecVolts(escSensorData0));
+        sbufWriteU8(dst, throttle);
+        sbufWriteU8(dst, power);
+	// There are no unused bytes in this frame.
+
+	sentErpm = escSensorData->erpm;
+        sentVolts = escSensorData->voltage;
+        lastTimeSentEscTele = currentTimeUs;
+	dprintf("Sending ESC frame\r\n");
+        return true;
+    }
+    dprintf("Not sending ESC frame\r\n");
+    return false;
+}
+
 #if defined (USE_SPEKTRUM_CMS_TELEMETRY) && defined (USE_CMS)
 
 // Betaflight CMS using Spektrum Tx telemetry TEXT_GEN sensor as display.
@@ -695,7 +795,13 @@ static bool srxlFrameVTX(sbuf_t *dst, timeUs_t currentTimeUs)
 #define SRXL_VTX_TM_COUNT        0
 #endif
 
-#define SRXL_SCHEDULE_USER_COUNT (SRXL_FP_MAH_COUNT + SRXL_SCHEDULE_CMS_COUNT + SRXL_VTX_TM_COUNT + SRXL_GPS_LOC_COUNT + SRXL_GPS_STAT_COUNT)
+#if defined(USE_ESC_SENSOR)
+#define SRXL_ESC_TELE_COUNT 1
+#else
+#define SRXL_ESC_TELE_COUNT 0
+#endif
+
+#define SRXL_SCHEDULE_USER_COUNT (SRXL_FP_MAH_COUNT + SRXL_SCHEDULE_CMS_COUNT + SRXL_VTX_TM_COUNT + SRXL_GPS_LOC_COUNT + SRXL_GPS_STAT_COUNT + SRXL_ESC_TELE_COUNT)
 #define SRXL_SCHEDULE_COUNT_MAX  (SRXL_SCHEDULE_MANDATORY_COUNT + 1)
 #define SRXL_TOTAL_COUNT         (SRXL_SCHEDULE_MANDATORY_COUNT + SRXL_SCHEDULE_USER_COUNT)
 
@@ -716,6 +822,9 @@ const srxlScheduleFnPtr srxlScheduleFuncs[SRXL_TOTAL_COUNT] = {
 #if defined (USE_SPEKTRUM_CMS_TELEMETRY) && defined (USE_CMS)
     srxlFrameText,
 #endif
+#if defined(USE_ESC_SENSOR)
+    srxlFrameEsc,
+#endif
 };
 
 
@@ -723,12 +832,13 @@ static void processSrxl(timeUs_t currentTimeUs)
 {
     static uint8_t srxlScheduleIndex = 0;
     static uint8_t srxlScheduleUserIndex = 0;
+    bool didSend = false;
 
     sbuf_t srxlPayloadBuf;
     sbuf_t *dst = &srxlPayloadBuf;
     srxlScheduleFnPtr srxlFnPtr;
 
-    dprintf("Request for SRXL telemetry index %d\r\n", srxlScheduleIndex);
+    uint8_t srxlScheduleUserIndex_old = srxlScheduleUserIndex;
     if (srxlScheduleIndex < SRXL_SCHEDULE_MANDATORY_COUNT) {
         srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex];
     } else {
@@ -757,8 +867,12 @@ static void processSrxl(timeUs_t currentTimeUs)
         srxlInitializeFrame(dst);
         if (srxlFnPtr(dst, currentTimeUs)) {
             srxlFinalize(dst);
+	    didSend = true;
         }
     }
+    dprintf("Request for SRXL telemetry index %d %d: ", srxlScheduleIndex,
+	    srxlScheduleUserIndex_old);
+    dprintf(didSend? " SENT\r\n" : "NOT SENT\r\n");
     srxlScheduleIndex = (srxlScheduleIndex + 1) % SRXL_SCHEDULE_COUNT_MAX;
 }
 
@@ -796,8 +910,6 @@ bool checkSrxlTelemetryState(void)
  */
 void handleSrxlTelemetry(timeUs_t currentTimeUs)
 {
-    dprintf("HandleSrxlTelemetry: %d %d\r\n",
-	    srxl2, srxl2TelemetryRequested());
   if (srxl2) {
 #if defined(USE_SERIALRX_SRXL2)
       if (srxl2TelemetryRequested()) {
