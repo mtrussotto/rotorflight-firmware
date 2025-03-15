@@ -807,6 +807,14 @@ static bool srxlFrameVTX(sbuf_t *dst, timeUs_t currentTimeUs)
 
 typedef bool (*srxlScheduleFnPtr)(sbuf_t *dst, timeUs_t currentTimeUs);
 
+srxlScheduleFnPtr srxlScheduleFuncs[SRXL_TOTAL_COUNT] = {
+    /* must send srxlFrameQos, Rpm and then alternating items of our own */
+    srxlFrameQos,
+    srxlFrameRpm,
+};
+uint8_t srxlConfiguredUserFrameCount = 0;
+
+#if 0
 const srxlScheduleFnPtr srxlScheduleFuncs[SRXL_TOTAL_COUNT] = {
     /* must send srxlFrameQos, Rpm and then alternating items of our own */
     srxlFrameQos,
@@ -826,52 +834,57 @@ const srxlScheduleFnPtr srxlScheduleFuncs[SRXL_TOTAL_COUNT] = {
     srxlFrameEsc,
 #endif
 };
+#endif
 
 
 static void processSrxl(timeUs_t currentTimeUs)
 {
     static uint8_t srxlScheduleIndex = 0;
     static uint8_t srxlScheduleUserIndex = 0;
+    uint8_t originalUserIndex = srxlScheduleUserIndex;
     bool didSend = false;
 
     sbuf_t srxlPayloadBuf;
     sbuf_t *dst = &srxlPayloadBuf;
     srxlScheduleFnPtr srxlFnPtr;
+    bool tryUserAgain = false;
 
-    uint8_t srxlScheduleUserIndex_old = srxlScheduleUserIndex;
-    if (srxlScheduleIndex < SRXL_SCHEDULE_MANDATORY_COUNT) {
-        srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex];
-    } else {
-        srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex + srxlScheduleUserIndex];
-        srxlScheduleUserIndex = (srxlScheduleUserIndex + 1) % SRXL_SCHEDULE_USER_COUNT;
-
+    do {
+	uint8_t srxlScheduleUserIndex_old = srxlScheduleUserIndex;
+	if (srxlScheduleIndex < SRXL_SCHEDULE_MANDATORY_COUNT) {
+	    srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex];
+	} else {
+	    srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex + srxlScheduleUserIndex];
+	    srxlScheduleUserIndex = (srxlScheduleUserIndex + 1) % srxlConfiguredUserFrameCount;
+	    // We want to keep trying user frames until one is sent or
+	    // we wrap around.
+	    tryUserAgain = srxlScheduleUserIndex != originalUserIndex;
+	    
 #if defined (USE_SPEKTRUM_CMS_TELEMETRY) && defined (USE_CMS)
-        // Boost CMS performance by sending nothing else but CMS Text frames when in a CMS menu.
-        // Sideeffect, all other reports are still not sent if user leaves CMS without a proper EXIT.
-        if (cmsInMenu &&
-            (pCurrentDisplay == &srxlDisplayPort)) {
-            srxlFnPtr = srxlFrameText;
-	    dprintf("Forcing SRXL text\r\n");
-        }
+	    // Boost CMS performance by sending nothing else but CMS Text frames when in a CMS menu.
+	    // Sideeffect, all other reports are still not sent if user leaves CMS without a proper EXIT.
+	    if (cmsInMenu &&
+		(pCurrentDisplay == &srxlDisplayPort)) {
+		srxlFnPtr = srxlFrameText;
+		dprintf("Forcing SRXL text\r\n");
+		tryUserAgain = false;
+	    }
 #endif
-
-    }
-
-    if (srxlFnPtr == srxlFrameFlightPackCurrent) {
-        if ( !isBatteryCurrentConfigured() ) {
-          srxlFnPtr = NULL;
-        }
-    }
-
-    if (srxlFnPtr) {
-        srxlInitializeFrame(dst);
-        if (srxlFnPtr(dst, currentTimeUs)) {
-            srxlFinalize(dst);
-	    didSend = true;
-        }
-    }
-    dprintf("Request for SRXL telemetry index %d %d: ", srxlScheduleIndex,
-	    srxlScheduleUserIndex_old);
+	}
+	
+	if (srxlFnPtr) {
+	    srxlInitializeFrame(dst);
+	    if (srxlFnPtr(dst, currentTimeUs)) {
+		srxlFinalize(dst);
+		didSend = true;
+		tryUserAgain = false;
+	    }
+	}
+	dprintf("Request for SRXL telemetry index %d %d: ", srxlScheduleIndex,
+		srxlScheduleUserIndex_old);
+	dprintf(didSend? " SENT\r\n" : "NOT SENT\r\n");
+    } while (tryUserAgain);
+    dprintf("Exiting telemetry: ");
     dprintf(didSend? " SENT\r\n" : "NOT SENT\r\n");
     srxlScheduleIndex = (srxlScheduleIndex + 1) % SRXL_SCHEDULE_COUNT_MAX;
 }
@@ -898,7 +911,49 @@ void initSrxlTelemetry(void)
         srxlDisplayportRegister();
     }
 #endif
- }
+    srxlScheduleFnPtr* userScheduleFuncs = srxlScheduleFuncs + SRXL_SCHEDULE_MANDATORY_COUNT;
+    if (featureIsEnabled(FEATURE_ESC_SENSOR)) {
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameEsc;
+	dprintf("SRXL Esc sensor telemetry enabled\r\n");
+    } else {
+	dprintf("SRXL Esc sensor telemetry DISABLED\r\n");
+    }
+    if (isBatteryCurrentConfigured()) {
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameFlightPackCurrent;
+	dprintf("SRXL current meter telemetry enabled\r\n");
+    } else {
+	dprintf("SRXL current meter telemetry DISABLED\r\n");
+    }
+#if defined(USE_GPS)
+    if (featureIsEnabled(FEATURE_GPS)) {
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameGpsStat;
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameGpsLoc;
+	dprintf("SRXL GPS telemetry enabled\r\n");
+    } else {
+	dprintf("SRXL GPS telemetry DISABLED\r\n");
+    }
+#endif
+#if defined(USE_SPEKTRUM_VTX_TELEMETRY) && defined(USE_SPEKTRUM_VTX_CONTROL) && defined(USE_VTX_COMMON)
+    if ((vtxDeviceType != VTXDEV_UNKNOWN) && vtxDeviceType != VTXDEV_UNSUPPORTED) {
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameVtx;
+	dprintf("SRXL VTX telemetry enabled\r\n");
+    } else {
+	dprintf("SRXL VTX telemetry DISABLED\r\n");
+    }
+#endif
+#if defined (USE_SPEKTRUM_CMS_TELEMETRY) && defined (USE_CMS)
+    if (featureIsEnabled(FEATURE_CMS)) {
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameText;
+	dprintf("SRXL CMS Menu telemetry enabled\r\n");
+    } else {
+	dprintf("SRXL CMS Menu telemetry DISABLED\r\n");
+    }
+#endif
+    if (srxlConfiguredUserFrameCount == 0) {
+	// Adding the null user frame simplifies processSrxl().
+	userScheduleFuncs[srxlConfiguredUserFrameCount++] = NULL;
+    }
+}
 
 bool checkSrxlTelemetryState(void)
 {
