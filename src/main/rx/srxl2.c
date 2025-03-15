@@ -24,8 +24,6 @@
 
 #ifdef USE_SERIALRX_SRXL2
 
-#include "build/dprintf.h"
-
 #include "common/crc.h"
 #include "common/maths.h"
 #include "common/streambuf.h"
@@ -42,13 +40,13 @@
 #include "io/spektrum_vtx_control.h"
 
 #ifndef SRXL2_DEBUG
-#define SRXL2_DEBUG 1
+#define SRXL2_DEBUG 0
 #endif
 
 #if SRXL2_DEBUG
 //void cliPrintf(const char *format, ...);
 //#define DEBUG_PRINTF(format, ...) cliPrintf(format, __VA_ARGS__)
-#define DEBUG_PRINTF(...) dprintf(__VA_ARGS__)//Temporary until a better debug printf can be included
+#define DEBUG_PRINTF(...) //Temporary until a better debug printf can be included
 #else
 #define DEBUG_PRINTF(...)
 #endif
@@ -192,7 +190,7 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
         channelMask &= ~mask;
     }
 
-     DEBUG_PRINTF("channel data: %d %d %x\r\n", channelData->rssi, channelData->frameLosses, channelData->channelMask.u32);
+     DEBUG_PRINTF("channel data: %d %d %x\r\n", channelData_header->rssi, channelData_header->frameLosses, channelData_header->channelMask.u32);
 }
 
 bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState)
@@ -201,7 +199,7 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
     const uint8_t ownId = (FlightController << 4) | unitId;
     if (controlData->replyId == ownId) {
         telemetryRequested = true;
-	DEBUG_PRINTF("command: %x replyId: %x ownId: %x\r\n", controlData->command, controlData->replyId, ownId);
+        DEBUG_PRINTF("command: %x replyId: %x ownId: %x\r\n", controlData->command, controlData->replyId, ownId);
     }
 
     switch (controlData->command) {
