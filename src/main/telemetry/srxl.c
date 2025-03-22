@@ -70,6 +70,13 @@
 
 #include "srxl.h"
 
+#define DEBUG_SRXL_TELEM 0
+#if DEBUG_SRXL_TELEM
+#define DEBUG_PRINTF(...) dprintf(__VA_ARGS__)
+#else
+#define DEBUG_PRINTF(...) while(0)
+#endif
+
 #define SRXL_ADDRESS_FIRST          0xA5
 #define SRXL_ADDRESS_SECOND         0x80
 #define SRXL_PACKET_LENGTH          0x15
@@ -230,7 +237,7 @@ bool srxlFrameRpm(sbuf_t *dst, timeUs_t currentTimeUs)
     sbufFill(dst, STRU_TELE_RPM_EMPTY_FIELDS_VALUE, STRU_TELE_RPM_EMPTY_FIELDS_COUNT);
 
     // Mandatory frame, send it unconditionally.
-    dprintf("Sending RPM frame\r\n");
+    DEBUG_PRINTF("Sending RPM frame\r\n");
     return true;
 }
 
@@ -454,10 +461,10 @@ bool srxlFrameFlightPackCurrent(sbuf_t *dst, timeUs_t currentTimeUs)
         sentAmps = amps;
         sentMah = mah;
         lastTimeSentFPmAh = currentTimeUs;
-	dprintf("Sending Flight Pack frame\r\n");
+	DEBUG_PRINTF("Sending Flight Pack frame\r\n");
         return true;
     }
-    dprintf("Not sending Flight Pack frame\r\n");
+    DEBUG_PRINTF("Not sending Flight Pack frame\r\n");
     return false;
 }
 
@@ -519,7 +526,7 @@ static uint8_t getBecVolts(escSensorData_t *escSensorData) {
 static bool srxlFrameEsc(sbuf_t *dst, timeUs_t currentTimeUs)
 {
     if (!featureIsEnabled(FEATURE_ESC_SENSOR)) {
-	dprintf("Not sending ESC frame because the feature is disabled\r\n");
+	DEBUG_PRINTF("Not sending ESC frame because the feature is disabled\r\n");
 	return false;
     }
 
@@ -553,10 +560,10 @@ static bool srxlFrameEsc(sbuf_t *dst, timeUs_t currentTimeUs)
 	sentErpm = escSensorData->erpm;
         sentVolts = escSensorData->voltage;
         lastTimeSentEscTele = currentTimeUs;
-	dprintf("Sending ESC frame\r\n");
+	DEBUG_PRINTF("Sending ESC frame\r\n");
         return true;
     }
-    dprintf("Not sending ESC frame\r\n");
+    DEBUG_PRINTF("Not sending ESC frame\r\n");
     return false;
 }
 
@@ -842,7 +849,9 @@ static void processSrxl(timeUs_t currentTimeUs)
     static uint8_t srxlScheduleIndex = 0;
     static uint8_t srxlScheduleUserIndex = 0;
     uint8_t originalUserIndex = srxlScheduleUserIndex;
+#if DEBUG_SRXL_TELEM
     bool didSend = false;
+#endif
 
     sbuf_t srxlPayloadBuf;
     sbuf_t *dst = &srxlPayloadBuf;
@@ -850,7 +859,9 @@ static void processSrxl(timeUs_t currentTimeUs)
     bool tryUserAgain = false;
 
     do {
+#if DEBUG_SRXL_TELEM
 	uint8_t srxlScheduleUserIndex_old = srxlScheduleUserIndex;
+#endif
 	if (srxlScheduleIndex < SRXL_SCHEDULE_MANDATORY_COUNT) {
 	    srxlFnPtr = srxlScheduleFuncs[srxlScheduleIndex];
 	} else {
@@ -866,7 +877,7 @@ static void processSrxl(timeUs_t currentTimeUs)
 	    if (cmsInMenu &&
 		(pCurrentDisplay == &srxlDisplayPort)) {
 		srxlFnPtr = srxlFrameText;
-		dprintf("Forcing SRXL text\r\n");
+		DEBUG_PRINTF("Forcing SRXL text\r\n");
 		tryUserAgain = false;
 	    }
 #endif
@@ -876,16 +887,18 @@ static void processSrxl(timeUs_t currentTimeUs)
 	    srxlInitializeFrame(dst);
 	    if (srxlFnPtr(dst, currentTimeUs)) {
 		srxlFinalize(dst);
-		didSend = true;
 		tryUserAgain = false;
+#if DEBUG_SRXL_TELEM
+		didSend = true;
+#endif		
 	    }
 	}
-	dprintf("Request for SRXL telemetry index %d %d: ", srxlScheduleIndex,
+	DEBUG_PRINTF("Request for SRXL telemetry index %d %d: ", srxlScheduleIndex,
 		srxlScheduleUserIndex_old);
-	dprintf(didSend? " SENT\r\n" : "NOT SENT\r\n");
+	DEBUG_PRINTF(didSend? " SENT\r\n" : "NOT SENT\r\n");
     } while (tryUserAgain);
-    dprintf("Exiting telemetry: ");
-    dprintf(didSend? " SENT\r\n" : "NOT SENT\r\n");
+    DEBUG_PRINTF("Exiting telemetry: ");
+    DEBUG_PRINTF(didSend? " SENT\r\n" : "NOT SENT\r\n");
     srxlScheduleIndex = (srxlScheduleIndex + 1) % SRXL_SCHEDULE_COUNT_MAX;
 }
 
@@ -914,39 +927,39 @@ void initSrxlTelemetry(void)
     srxlScheduleFnPtr* userScheduleFuncs = srxlScheduleFuncs + SRXL_SCHEDULE_MANDATORY_COUNT;
     if (featureIsEnabled(FEATURE_ESC_SENSOR)) {
 	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameEsc;
-	dprintf("SRXL Esc sensor telemetry enabled\r\n");
+	DEBUG_PRINTF("SRXL Esc sensor telemetry enabled\r\n");
     } else {
-	dprintf("SRXL Esc sensor telemetry DISABLED\r\n");
+	DEBUG_PRINTF("SRXL Esc sensor telemetry DISABLED\r\n");
     }
     if (isBatteryCurrentConfigured()) {
 	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameFlightPackCurrent;
-	dprintf("SRXL current meter telemetry enabled\r\n");
+	DEBUG_PRINTF("SRXL current meter telemetry enabled\r\n");
     } else {
-	dprintf("SRXL current meter telemetry DISABLED\r\n");
+	DEBUG_PRINTF("SRXL current meter telemetry DISABLED\r\n");
     }
 #if defined(USE_GPS)
     if (featureIsEnabled(FEATURE_GPS)) {
 	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameGpsStat;
 	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameGpsLoc;
-	dprintf("SRXL GPS telemetry enabled\r\n");
+	DEBUG_PRINTF("SRXL GPS telemetry enabled\r\n");
     } else {
-	dprintf("SRXL GPS telemetry DISABLED\r\n");
+	DEBUG_PRINTF("SRXL GPS telemetry DISABLED\r\n");
     }
 #endif
 #if defined(USE_SPEKTRUM_VTX_TELEMETRY) && defined(USE_SPEKTRUM_VTX_CONTROL) && defined(USE_VTX_COMMON)
     if ((vtxDeviceType != VTXDEV_UNKNOWN) && vtxDeviceType != VTXDEV_UNSUPPORTED) {
 	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameVtx;
-	dprintf("SRXL VTX telemetry enabled\r\n");
+	DEBUG_PRINTF("SRXL VTX telemetry enabled\r\n");
     } else {
-	dprintf("SRXL VTX telemetry DISABLED\r\n");
+	DEBUG_PRINTF("SRXL VTX telemetry DISABLED\r\n");
     }
 #endif
 #if defined (USE_SPEKTRUM_CMS_TELEMETRY) && defined (USE_CMS)
     if (featureIsEnabled(FEATURE_CMS)) {
 	userScheduleFuncs[srxlConfiguredUserFrameCount++] = srxlFrameText;
-	dprintf("SRXL CMS Menu telemetry enabled\r\n");
+	DEBUG_PRINTF("SRXL CMS Menu telemetry enabled\r\n");
     } else {
-	dprintf("SRXL CMS Menu telemetry DISABLED\r\n");
+	DEBUG_PRINTF("SRXL CMS Menu telemetry DISABLED\r\n");
     }
 #endif
     if (srxlConfiguredUserFrameCount == 0) {
