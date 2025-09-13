@@ -27,7 +27,6 @@
 #if defined(USE_TELEMETRY_SRXL)
 
 #include "build/version.h"
-#include "build/dprintf.h"
 
 #include "cms/cms.h"
 
