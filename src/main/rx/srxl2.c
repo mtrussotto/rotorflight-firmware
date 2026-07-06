@@ -28,6 +28,8 @@
 #include "common/maths.h"
 #include "common/streambuf.h"
 
+#include "blackbox/blackbox.h"
+
 #include "drivers/nvic.h"
 #include "drivers/time.h"
 #include "drivers/serial.h"
@@ -177,6 +179,7 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
 
     //If receiver is in a connected state, and a packet is missed, the channel mask will be 0.
     if (!channelData->channelMask.u32) {
+	blackboxLogCustomString("RXDROP");
         globalResult |= RX_FRAME_DROPPED;
         return;
     }
@@ -197,6 +200,8 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
 {
     const Srxl2ControlDataSubHeader* controlData = (Srxl2ControlDataSubHeader*)(header + 1);
     const uint8_t ownId = (FlightController << 4) | unitId;
+    static bool wasFS = false;
+    
     if (controlData->replyId == ownId) {
         telemetryRequested = true;
         DEBUG_PRINTF("command: %x replyId: %x ownId: %x\r\n", controlData->command, controlData->replyId, ownId);
@@ -204,12 +209,20 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
 
     switch (controlData->command) {
     case ChannelData:
+	if (wasFS) {
+	    blackboxLogCustomString("RXFSOFF");
+	    wasFS = false;
+	}
         srxl2ProcessChannelData((const Srxl2ChannelDataHeader *) (controlData + 1), rxRuntimeState);
         break;
 
     case FailsafeChannelData: {
         globalResult |= RX_FRAME_FAILSAFE;
         setRssiDirect(0, RSSI_SOURCE_RX_PROTOCOL);
+	if (!wasFS) {
+	    blackboxLogCustomString("RXFSON");
+	    wasFS = true;
+	}
         // DEBUG_PRINTF("fs channel data\r\n");
     } break;
 
@@ -259,6 +272,7 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState)
 {
     if (processBufferPtr->packet.header.id != SRXL2_ID || processBufferPtr->len != processBufferPtr->packet.header.length) {
         DEBUG_PRINTF("invalid header id: %x, or length: %x received vs %x expected \r\n", processBufferPtr->packet.header.id, processBufferPtr->len, processBufferPtr->packet.header.length);
+	blackboxLogCustomString("RXINVALHDR");
         globalResult = RX_FRAME_DROPPED;
         return;
     }
@@ -267,6 +281,7 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState)
 
     //Invalid if crc non-zero
     if (calculatedCrc) {
+	blackboxLogCustomString("RXINVALCRC");
         globalResult = RX_FRAME_DROPPED;
         DEBUG_PRINTF("crc mismatch %x\r\n", calculatedCrc);
         return;
@@ -280,6 +295,7 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState)
     }
 
     DEBUG_PRINTF("could not parse packet: %x\r\n", processBufferPtr->packet.header.packetType);
+    blackboxLogCustomString("RXBADPARSE");
     globalResult = RX_FRAME_DROPPED;
 }
 
@@ -293,6 +309,7 @@ static void srxl2DataReceive(uint16_t character, void *data)
     //If the buffer len is not reset for whatever reason, disable reception
     if (readBufferPtr->len > 0 || readBufferIdx >= SRXL2_MAX_PACKET_LENGTH) {
         readBufferIdx = 0;
+	blackboxLogCustomString("RXBADLEN");
         globalResult = RX_FRAME_DROPPED;
     }
     else {
@@ -386,7 +403,7 @@ static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
             DEBUG_PRINTF("case SendHandshake: switching to %d baud\r\n", SRXL2_PORT_BAUDRATE_DEFAULT);
             timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
-
+	    blackboxLogCustomString("RXBRCHSH");
             state = ListenForActivity;
             lastReceiveTimestamp = 0;
         }
@@ -398,6 +415,7 @@ static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
             DEBUG_PRINTF("case ListenForHandshake: switching to %d baud\r\n", SRXL2_PORT_BAUDRATE_DEFAULT);
             timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
+	    blackboxLogCustomString("RXBRCHLH");
 
             state = ListenForActivity;
             lastReceiveTimestamp = 0;
@@ -411,6 +429,7 @@ static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
             DEBUG_PRINTF("case Running: switching to %d baud: %d %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, now, lastValidPacketTimestamp);
             timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
+	    blackboxLogCustomString("RXBRCHRUN");
 
             state = ListenForActivity;
             lastReceiveTimestamp = 0;
