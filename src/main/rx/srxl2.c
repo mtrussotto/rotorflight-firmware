@@ -177,6 +177,11 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
         setRssi(scaleRange(rssiPercent, 0, 100, 0, RSSI_MAX_VALUE), RSSI_SOURCE_RX_PROTOCOL);
     }
 
+    if (channelData->frameLosses != ((uint16_t *)rxRuntimeState->frameData)[0]) {
+	uint16_t diff =channelData->frameLosses - ((uint16_t *)rxRuntimeState->frameData)[0];
+	((uint16_t *)rxRuntimeState->frameData)[0] = channelData->frameLosses;
+	blackboxLogCustomData((uint8_t *)&diff, sizeof(diff));
+    }
     //If receiver is in a connected state, and a packet is missed, the channel mask will be 0.
     if (!channelData->channelMask.u32) {
 	blackboxLogCustomString("RXDROP");
@@ -504,6 +509,7 @@ void validateAndFixSrxl2Config()
 bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
 {
     static uint16_t channelData[SRXL2_MAX_CHANNELS];
+    static uint16_t frameData[1];
     for (size_t i = 0; i < SRXL2_MAX_CHANNELS; ++i) {
         channelData[i] = SRXL2_CHANNEL_CENTER;
     }
@@ -514,6 +520,7 @@ bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
     rxRuntimeState->channelData = channelData;
     rxRuntimeState->channelCount = SRXL2_MAX_CHANNELS;
     rxRuntimeState->rxRefreshRate = SRXL2_FRAME_PERIOD_US;
+    rxRuntimeState->frameData = frameData;
 
     rxRuntimeState->rcReadRawFn = srxl2ReadRawRC;
     rxRuntimeState->rcFrameStatusFn = srxl2FrameStatus;
