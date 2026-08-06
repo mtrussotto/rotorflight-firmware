@@ -179,6 +179,10 @@
 void targetPreInit(void);
 #endif
 
+#ifdef USE_SERIALRX_SRXL2
+extern void srxl2InitSmartThrottle();
+#endif
+
 uint8_t systemState = SYSTEM_STATE_INITIALISING;
 
 #ifdef BUS_SWITCH_PIN
@@ -528,7 +532,9 @@ void init(void)
     serialInit(featureIsEnabled(FEATURE_SOFTSERIAL), SERIAL_PORT_NONE);
 #endif
     initDebugSerial(SERIAL_PORT_USART6, 115200);
-
+#ifdef USE_SERIALRX_SRXL2
+    srxl2InitSmartThrottle();
+#endif
 
     mixerInit();
 
