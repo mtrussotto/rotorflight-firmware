@@ -68,6 +68,7 @@
 #define SRXL2_ID                       0xA6
 #define SRXL2_MAX_PACKET_LENGTH        80
 #define SRXL2_DEVICE_ID_BROADCAST      0xFF
+#define SRXL2_DEVICE_ID_NONE           0
 
 #define SRXL2_FRAME_TIMEOUT_US         50000
 
@@ -96,6 +97,7 @@ static uint32_t fullTimeoutTimestamp = 0;
 static uint32_t lastValidPacketTimestamp = 0;
 static volatile uint32_t lastReceiveTimestamp = 0;
 static volatile uint32_t lastIdleTimestamp = 0;
+static volatile uint32_t idlePackets = 0;
 
 struct rxBuf readBuffer[2];
 struct rxBuf* readBufferPtr = &readBuffer[0];
@@ -158,7 +160,7 @@ bool srxl2ProcessHandshake(const Srxl2Header* header)
             /* priority */ 10,
             /* baudSupported*/ baudRate,
             /* info */ 0,
-            // U_ID_2
+            0x12345678, // U_ID_2
         }
     };
 
@@ -254,13 +256,11 @@ bool srxl2ProcessPacket(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeSt
     return false;
 }
 
-// @note assumes packet is fully there
-void srxl2Process(rxRuntimeState_t *rxRuntimeState)
-{
+bool srxl2IsPacketValid() {
     if (processBufferPtr->packet.header.id != SRXL2_ID || processBufferPtr->len != processBufferPtr->packet.header.length) {
         DEBUG_PRINTF("invalid header id: %x, or length: %x received vs %x expected \r\n", processBufferPtr->packet.header.id, processBufferPtr->len, processBufferPtr->packet.header.length);
         globalResult = RX_FRAME_DROPPED;
-        return;
+        return false;
     }
 
     const uint16_t calculatedCrc = crc16_ccitt_update(0, processBufferPtr->packet.raw, processBufferPtr->packet.header.length);
@@ -269,11 +269,18 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState)
     if (calculatedCrc) {
         globalResult = RX_FRAME_DROPPED;
         DEBUG_PRINTF("crc mismatch %x\r\n", calculatedCrc);
-        return;
+        return false;
     }
+    return true;
+}
 
-    //Packet is valid only after ID and CRC check out
-    lastValidPacketTimestamp = micros();
+// @note assumes packet is fully there
+void srxl2Process(rxRuntimeState_t *rxRuntimeState)
+{
+    if (srxl2IsPacketValid()) {
+	//Packet is valid only after ID and CRC check out
+	lastValidPacketTimestamp = micros();
+    }
 
     if (srxl2ProcessPacket(&processBufferPtr->packet.header, rxRuntimeState)) {
         return;
@@ -303,6 +310,7 @@ static void srxl2DataReceive(uint16_t character, void *data)
 
 static void srxl2Idle(void)
 {
+    ++idlePackets;
     if (transmittingTelemetry) { // Transmitting telemetry triggers idle interrupt as well. We dont want to change buffers then
         transmittingTelemetry = false;
     }
@@ -365,7 +373,7 @@ static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
 
             if (unitId == 0) {
                 state = SendHandshake;
-                timeoutTimestamp = now + SRXL2_SEND_HANDSHAKE_TIMEOUT_US;
+                timeoutTimestamp = now;
                 fullTimeoutTimestamp = now + SRXL2_LISTEN_FOR_HANDSHAKE_TIMEOUT_US;
             } else {
                 state = ListenForHandshake;
@@ -376,6 +384,25 @@ static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
 
     case SendHandshake: {
         if (cmpTimeUs(now, timeoutTimestamp) >= 0) {
+	    timeoutTimestamp = now + SRXL2_SEND_HANDSHAKE_TIMEOUT_US;
+	    Srxl2HandshakeFrame response = {
+		.header = {
+		    .id = SRXL2_ID,
+		    .packetType = Handshake,
+		    .length = sizeof(Srxl2HandshakeFrame),
+		},
+		.payload = {
+		    .sourceDeviceId = ((FlightController << 4) | unitId),
+		    .destinationDeviceId = SRXL2_DEVICE_ID_NONE,
+		    .priority = 10,
+		    .baudSupported = baudRate,
+		    .info = 0,
+		    .uniqueId = 0x12345678, /* this isn't very unique */
+		}
+	    };
+
+	    DEBUG_PRINTF("Sending handshake to 0\r\n");
+	    srxl2RxWriteData(&response, sizeof(response));
             // @todo set another timeout for 50ms tries
             // fill write buffer with handshake frame
             result |= RX_FRAME_PROCESSING_REQUIRED;
@@ -482,6 +509,115 @@ void validateAndFixSrxl2Config(void)
     rxConfigMutable()->halfDuplex = true;
 }
 
+void srxl2InitSmartThrottle() {
+    // Get smart throttle devices to switch to SRXL2 mode, which must
+    // be done very shortly (<< 200ms) after receiver power-on.
+    //
+    // This does not implement the entire handshake algorithm, because
+    // that could take a long time and delay initialization --
+    // e.g. the AR6610T polls 10 devices, taking about 30ms each.
+    // Instead, we do the 50ms listen and then send up to three
+    // handshakes until we receive handshake or control data packets.
+    // When normal rxInit occurs the system will re-sync properly.
+    const rxConfig_t *rxConfigPtr = rxConfig();
+    unitId = rxConfigPtr->srxl2_unit_id;
+    baudRate = rxConfigPtr->srxl2_baud_fast;
+    // Only unit 0 should send unsolicited packets on startup.
+    if (unitId != 0 || rxConfigPtr->serialrx_provider != SERIALRX_SRXL2)
+	return;
+    DEBUG_PRINTF("Running SRXL2 Smart Throttle init\r\n");
+    const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
+    if (!portConfig) {
+        return;
+    }
+
+    serialPort = openSerialPort(
+        portConfig->identifier,
+        FUNCTION_RX_SERIAL,
+        srxl2DataReceive,
+        NULL,
+        SRXL2_PORT_BAUDRATE_DEFAULT,
+        SRXL2_PORT_MODE,
+        SRXL2_PORT_OPTIONS |
+            (rxConfigPtr->serialrx_inverted ? SERIAL_INVERTED : SERIAL_NOT_INVERTED) |
+            (rxConfigPtr->halfDuplex ? SERIAL_BIDIR : SERIAL_UNIDIR) |
+            (rxConfigPtr->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP)
+        );
+
+    if (!serialPort) {
+        return;
+    }
+    serialPort->idleCallback = srxl2Idle;
+    uint32_t start_micros = micros();
+    uint32_t now = start_micros;
+    while ((now - start_micros) < 50000) {
+	if (idlePackets > 1) {
+	    if (lastReceiveTimestamp == 0) {
+		DEBUG_PRINTF("Noise/framing error, probably wrong baud rate reception\r\n");
+	    } else {
+		DEBUG_PRINTF("Received something, allow regular algo to take it\r\n");
+	    }
+	    return;
+	}
+	now = micros();
+    }
+    if (idlePackets == 0) {
+	DEBUG_PRINTF("No serial device detected on SRXL2 port\r\n");
+	return;
+    }
+    Srxl2HandshakeFrame response = {
+	.header = {
+	    .id = SRXL2_ID,
+	    .packetType = Handshake,
+	    .length = sizeof(Srxl2HandshakeFrame),
+	},
+	.payload = {
+	    .sourceDeviceId = ((FlightController << 4) | unitId),
+	    .destinationDeviceId = SRXL2_DEVICE_ID_NONE,
+	    .priority = 10,
+	    .baudSupported = baudRate,
+	    .info = 0,
+	    .uniqueId = 0x12345678, /* this isn't very unique */
+	}
+    };
+
+    ++lastIdleTimestamp; // ProcessFrame won't send data if lastIdleTimestamp = lastReceiveTimestamp
+    state = SendHandshake;
+    for (int i = 0; state == SendHandshake && i < 3; i++) {
+	// Since we receive our own data, lastReceiveTimestamp will be set forward whenever we
+	// transmit, and since we don't count the associated idle, prevent a subsequent
+	// transmission.
+	lastReceiveTimestamp = 0;
+	DEBUG_PRINTF("SmartStart: Sending handshake to 0 (%d)\r\n", i);
+	srxl2RxWriteData(&response, sizeof(response));
+	start_micros = now;
+	while (state == SendHandshake && (now - start_micros) < 50000) {
+	    if (writeBufferIdx) {
+		// This writes the handshake packet.
+		srxl2ProcessFrame(NULL);
+	    }
+	    if (processBufferPtr != NULL && processBufferPtr->len) {
+		if (srxl2IsPacketValid()) {
+		    lastValidPacketTimestamp = micros();
+		    if (processBufferPtr->packet.header.packetType == Handshake) {
+			state = ListenForHandshake;
+		    } else if (processBufferPtr->packet.header.packetType == ControlData) {
+			state = Running;
+		    }
+		    // We don't process this packet because we're not fully initialized.
+		}
+		processBufferPtr->len = 0;
+		if (state != SendHandshake) {
+		    DEBUG_PRINTF("Exiting smart throttle init successfully\r\n");
+		    return;
+		}
+	    }
+	    now = micros();
+	}
+    }
+    DEBUG_PRINTF("Exiting smart throttle init without seeing activity\r\n");
+}
+
 bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
 {
     static uint16_t channelData[SRXL2_MAX_CHANNELS];
@@ -506,6 +642,7 @@ bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
         return false;
     }
 
+    if (!serialPort) {
     serialPort = openSerialPort(
         portConfig->identifier,
         FUNCTION_RX_SERIAL,
@@ -518,6 +655,7 @@ bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
             (rxConfig->halfDuplex ? SERIAL_BIDIR : SERIAL_UNIDIR) |
             (rxConfig->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP)
         );
+    }
 
     if (!serialPort) {
         return false;
