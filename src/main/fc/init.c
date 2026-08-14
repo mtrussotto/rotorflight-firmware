@@ -156,6 +156,7 @@
 
 #include "rx/rx.h"
 #include "rx/spektrum.h"
+#include "rx/srxl2.h"
 
 #include "scheduler/scheduler.h"
 
@@ -177,10 +178,6 @@
 
 #ifdef TARGET_PREINIT
 void targetPreInit(void);
-#endif
-
-#ifdef USE_SERIALRX_SRXL2
-extern void srxl2InitSmartThrottle();
 #endif
 
 uint8_t systemState = SYSTEM_STATE_INITIALISING;
@@ -533,7 +530,7 @@ void init(void)
 #endif
     initDebugSerial(SERIAL_PORT_USART6, 115200);
 #ifdef USE_SERIALRX_SRXL2
-    srxl2InitSmartThrottle();
+    srxl2InitSmartThrottle(rxConfig());
 #endif
 
     mixerInit();
