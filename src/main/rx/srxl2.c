@@ -101,7 +101,6 @@ static uint32_t fullTimeoutTimestamp = 0;
 static uint32_t lastValidPacketTimestamp = 0;
 static volatile uint32_t lastReceiveTimestamp = 0;
 static volatile uint32_t lastIdleTimestamp = 0;
-static volatile uint32_t idlePackets = 0;
 
 struct rxBuf readBuffer[2];
 struct rxBuf* readBufferPtr = &readBuffer[0];
@@ -342,7 +341,6 @@ static void srxl2DataReceive(uint16_t character, void *data)
 
 static void srxl2Idle()
 {
-    ++idlePackets;
     if (transmittingTelemetry) { // Transmitting telemetry triggers idle interrupt as well. We dont want to change buffers then
         transmittingTelemetry = false;
     }
@@ -591,22 +589,13 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig) {
     uint32_t start_micros = micros();
     uint32_t now = start_micros;
     while ((now - start_micros) < 50000) {
-	if (idlePackets > 1) {
-	    if (lastReceiveTimestamp == 0) {
-		DEBUG_PRINTF("Noise/framing error, probably wrong baud rate reception\r\n");
-	    } else {
-		DEBUG_PRINTF("Received something, allow regular algo to take it\r\n");
-	    }
+	if (lastReceiveTimestamp > 0) {
+	    // Any activity on the bus is sufficient to skip sending the initial handshake
+	    // packets.
+	    DEBUG_PRINTF("Received something, allow regular algo to take it\r\n");
 	    return;
 	}
 	now = micros();
-    }
-    if (idlePackets == 0) {
-	DEBUG_PRINTF("No serial device detected on SRXL2 port\r\n");
-	// We continue sending handshake packets in this case because
-	// detecting the first idle condition is racy, probably
-	// because setting idleCallback, above, is not atomic with
-	// opening the serial port.
     }
 
     ++lastIdleTimestamp; // ProcessFrame won't send data if lastIdleTimestamp = lastReceiveTimestamp
