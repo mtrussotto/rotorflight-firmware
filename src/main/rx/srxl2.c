@@ -571,7 +571,7 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig) {
     // 1) Wait 50ms for activity on the line.  We expect to see the
     // line go idle exactly once.  If it goes idle more than that, it
     // means there's some sort of activity on the bus and we should
-    // not send packaets.  If it never goes idle there's probably no
+    // not send handshake packets.  If it never goes idle there's probably no
     // device connected.  We don't attempt to validate any data
     // because it may ba at the wrong baud rate.
     // 
@@ -603,7 +603,10 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig) {
     }
     if (idlePackets == 0) {
 	DEBUG_PRINTF("No serial device detected on SRXL2 port\r\n");
-	return;
+	// We continue sending handshake packets in this case because
+	// detecting the first idle condition is racy, probably
+	// because setting idleCallback, above, is not atomic with
+	// opening the serial port.
     }
 
     ++lastIdleTimestamp; // ProcessFrame won't send data if lastIdleTimestamp = lastReceiveTimestamp
