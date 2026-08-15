@@ -561,25 +561,21 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
 
 void srxl2InitSmartThrottle(const rxConfig_t *rxConfig)
 {
-    // Get smart throttle devices to switch to SRXL2 mode, which must
-    // be done very shortly (<< 200ms) after receiver power-on.
-    // This is only done if our own unit ID is 0 (as specified in the SRXL2 protocol)
+    // Get smart throttle devices to switch to SRXL2 mode, which must be done very shortly (<<
+    // 200ms) after receiver power-on.  This is only done if our own unit ID is 0 (as specified
+    // in the SRXL2 protocol)
     //
-    // This does not implement the entire handshake algorithm, because
-    // that could take a long time and delay initialization --
-    // e.g. the AR6610T polls 10 devices, taking about 30ms each.
+    // This does not implement the entire handshake algorithm, because that could take a long
+    // time and delay initialization -- e.g. the AR6610T polls 10 devices, taking about 30ms
+    // each.
     //
     // Instead, it implements only the first 2 steps of the algorithm.
     //
-    // 1) Wait 50ms for activity on the line.  We expect to see the
-    // line go idle exactly once.  If it goes idle more than that, it
-    // means there's some sort of activity on the bus and we should
-    // not send handshake packets.  If it never goes idle there's probably no
-    // device connected.  We don't attempt to validate any data
-    // because it may ba at the wrong baud rate.
+    // 1) Wait 50ms for activity on the line.  If there is any, just exit and do the full
+    // handshake at startup.  Don't validate packets since we may be at the wrong baud rate.
     //
-    // 2) Send up to three handshake packets to device 0, 50ms apart.
-    //    If we see a valid packet on the bus at any point, exit.
+    // 2) Send up to three handshake packets to device 0, 50ms apart.  If we see a valid packet
+    //    on the bus at any point, exit.
     //
     // When full initialization occurs, we will re-sync as if communication was lost.
     unitId = rxConfig->srxl2_unit_id;
