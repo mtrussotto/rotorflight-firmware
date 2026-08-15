@@ -119,7 +119,8 @@ static uint8_t telemetryFrame[22];
 
 uint8_t globalResult = 0;
 
-static void srxl2SendHandshake(uint8_t destDeviceId) {
+static void srxl2SendHandshake(uint8_t destDeviceId)
+{
     Srxl2HandshakeFrame response = {
         .header = {
             .id = SRXL2_ID,
@@ -283,7 +284,8 @@ bool srxl2ProcessPacket(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeSt
     return false;
 }
 
-bool srxl2IsPacketValid(void) {
+bool srxl2IsPacketValid(void)
+{
     if (processBufferPtr->packet.header.id != SRXL2_ID || processBufferPtr->len != processBufferPtr->packet.header.length) {
         DEBUG_PRINTF("invalid header id: %x, or length: %x received vs %x expected \r\n", processBufferPtr->packet.header.id, processBufferPtr->len, processBufferPtr->packet.header.length);
 	blackboxLogCustomString("RXINVALHDR");
@@ -532,7 +534,8 @@ void validateAndFixSrxl2Config()
     rxConfigMutable()->halfDuplex = true;
 }
 
-static void srxl2InitSerialPort(const rxConfig_t *rxConfig) {
+static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
+{
     const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
     if (!portConfig) {
         serialPort = NULL;
@@ -540,22 +543,23 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig) {
     }
 
     serialPort = openSerialPort(
-        portConfig->identifier,
-        FUNCTION_RX_SERIAL,
-        srxl2DataReceive,
-        NULL,
-        SRXL2_PORT_BAUDRATE_DEFAULT,
-        SRXL2_PORT_MODE,
-        SRXL2_PORT_OPTIONS |
-            (rxConfig->serialrx_inverted ? SERIAL_INVERTED : SERIAL_NOT_INVERTED) |
-            (rxConfig->halfDuplex ? SERIAL_BIDIR : SERIAL_UNIDIR) |
-            (rxConfig->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP)
-        );
+                     portConfig->identifier,
+                     FUNCTION_RX_SERIAL,
+                     srxl2DataReceive,
+                     NULL,
+                     SRXL2_PORT_BAUDRATE_DEFAULT,
+                     SRXL2_PORT_MODE,
+                     SRXL2_PORT_OPTIONS |
+                     (rxConfig->serialrx_inverted ? SERIAL_INVERTED : SERIAL_NOT_INVERTED) |
+                     (rxConfig->halfDuplex ? SERIAL_BIDIR : SERIAL_UNIDIR) |
+                     (rxConfig->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP)
+                 );
     if (serialPort)
         serialPort->idleCallback = srxl2Idle;
 }
 
-void srxl2InitSmartThrottle(const rxConfig_t *rxConfig) {
+void srxl2InitSmartThrottle(const rxConfig_t *rxConfig)
+{
     // Get smart throttle devices to switch to SRXL2 mode, which must
     // be done very shortly (<< 200ms) after receiver power-on.
     // This is only done if our own unit ID is 0 (as specified in the SRXL2 protocol)
@@ -572,7 +576,7 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig) {
     // not send handshake packets.  If it never goes idle there's probably no
     // device connected.  We don't attempt to validate any data
     // because it may ba at the wrong baud rate.
-    // 
+    //
     // 2) Send up to three handshake packets to device 0, 50ms apart.
     //    If we see a valid packet on the bus at any point, exit.
     //
