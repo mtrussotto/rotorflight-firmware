@@ -70,6 +70,7 @@
 #define SRXL2_REPLY_QUIESCENCE         (2 * 10 * 1000000 / SRXL2_PORT_BAUDRATE_DEFAULT) // 2 * (lastIdleTimestamp - lastReceiveTimestamp). Time taken to send 2 bytes
 
 #define SRXL2_ID                       0xA6
+#define SRXL2_U_ID_2                   0x00000000
 #define SRXL2_MAX_PACKET_LENGTH        80
 #define SRXL2_DEVICE_ID_BROADCAST      0xFF
 #define SRXL2_DEVICE_ID_NONE           0
@@ -133,7 +134,7 @@ static void srxl2SendHandshake(uint8_t destDeviceId)
             .priority = 10,
             .baudSupported = baudRate,
             .info = 0,
-            .uniqueId = 0x12345678, /* this isn't very unique */
+            .uniqueId = SRXL2_U_ID_2, /* this isn't very unique */
         }
     };
 
