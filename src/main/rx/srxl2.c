@@ -309,10 +309,12 @@ bool srxl2IsPacketValid(void)
 // @note assumes packet is fully there
 void srxl2Process(rxRuntimeState_t *rxRuntimeState)
 {
-    if (srxl2IsPacketValid()) {
-        //Packet is valid only after ID and CRC check out
-        lastValidPacketTimestamp = micros();
+    if (!srxl2IsPacketValid()) {
+        return;
     }
+
+    //Packet is valid only after ID and CRC check out
+    lastValidPacketTimestamp = micros();
 
     if (srxl2ProcessPacket(&processBufferPtr->packet.header, rxRuntimeState)) {
         return;
