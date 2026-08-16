@@ -26,6 +26,7 @@
 
 #include "common/crc.h"
 #include "common/maths.h"
+#include "common/printf.h"
 #include "common/streambuf.h"
 
 #include "drivers/nvic.h"
@@ -39,6 +40,7 @@
 #include "rx/srxl2_types.h"
 #include "io/spektrum_vtx_control.h"
 
+#define SRXL2_DEBUG 1
 #ifndef SRXL2_DEBUG
 #define SRXL2_DEBUG 0
 #endif
@@ -46,7 +48,7 @@
 #if SRXL2_DEBUG
 //void cliPrintf(const char *format, ...);
 //#define DEBUG_PRINTF(format, ...) cliPrintf(format, __VA_ARGS__)
-#define DEBUG_PRINTF(...) //Temporary until a better debug printf can be included
+#define DEBUG_PRINTF(...) printf(__VA_ARGS__)
 #else
 #define DEBUG_PRINTF(...)
 #endif
