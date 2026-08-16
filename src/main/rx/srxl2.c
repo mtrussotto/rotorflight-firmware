@@ -203,7 +203,7 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
         channelMask &= ~mask;
     }
 
-     DEBUG_PRINTF("channel data: %d %d %x\r\n", channelData_header->rssi, channelData_header->frameLosses, channelData_header->channelMask.u32);
+     DEBUG_PRINTF("channel data: %d %d %lx\r\n", channelData->rssi, channelData->frameLosses, channelData->channelMask.u32);
 }
 
 bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState)
@@ -441,7 +441,7 @@ static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
         // frame timed out, reset state
         if (cmpTimeUs(now, lastValidPacketTimestamp) >= SRXL2_FRAME_TIMEOUT_US) {
             serialSetBaudRate(serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
-            DEBUG_PRINTF("case Running: switching to %d baud: %d %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, now, lastValidPacketTimestamp);
+            DEBUG_PRINTF("case Running: switching to %d baud: %ld %ld\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, now, lastValidPacketTimestamp);
             timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
@@ -480,10 +480,10 @@ static bool srxl2ProcessFrame(const rxRuntimeState_t *rxRuntimeState)
             serialWriteBuf(serialPort, writeBuffer, writeBufferIdx);
             writeBufferIdx = 0;
         } else {
-            DEBUG_PRINTF("not enough time to send 2 characters passed yet, %d us since last receive, %d required\r\n", now - lastReceiveTimestamp, SRXL2_REPLY_QUIESCENCE);
+            DEBUG_PRINTF("not enough time to send 2 characters passed yet, %ld us since last receive, %d required\r\n", now - lastReceiveTimestamp, SRXL2_REPLY_QUIESCENCE);
         }
     } else {
-        DEBUG_PRINTF("still receiving a frame, %d %d\r\n", lastIdleTimestamp, lastReceiveTimestamp);
+        DEBUG_PRINTF("still receiving a frame, %ld %ld\r\n", lastIdleTimestamp, lastReceiveTimestamp);
     }
 
     return true;
