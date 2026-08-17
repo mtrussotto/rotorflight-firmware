@@ -83,7 +83,7 @@ bool srxl2escGetLatestTelemetry(uint8_t *sensorId, uint8_t *secondaryId, uint8_t
 bool srxl2escCopyLatestTelemetry(srxl2escTelemetrySnapshot_t *out, uint32_t *outSeq);
 
 void srxl2escDataReceive(uint16_t c, void *ctx);
-void srxl2escIdle(void);
+void srxl2escIdle(void *);
 void srxl2escAttachPort(serialPort_t *p);
 
 bool srxl2escDriverInit(void);

@@ -72,7 +72,7 @@ typedef enum {
 #define CTRL_LINE_STATE_RTS     BIT(1)
 
 typedef void (*serialReceiveCallbackPtr)(uint16_t data, void *rxCallbackData);   // used by serial drivers to return frames to app
-typedef void (*serialIdleCallbackPtr)(void);
+typedef void (*serialIdleCallbackPtr)(void *idleCallbackData);
 
 typedef struct serialPort_s {
 
@@ -93,7 +93,7 @@ typedef struct serialPort_s {
     uint32_t txBufferTail;
 
     serialReceiveCallbackPtr rxCallback;
-    void *rxCallbackData;
+    void *rxCallbackData;  // Currently used for both idleCallback and rxCallback
 
     serialIdleCallbackPtr idleCallback;
 
