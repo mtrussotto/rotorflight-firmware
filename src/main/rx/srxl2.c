@@ -116,7 +116,7 @@ typedef struct SRXL2Bus {
 } SRXL2Bus;
 #define SRXL2_MAX_BUSES 2
 #define SRXL2_PRIMARY_BUS 0
-struct SRXL2Bus srxl2bus[SRXL2_MAX_BUSES];
+SRXL2Bus srxl2bus[SRXL2_MAX_BUSES];
 // Must set these members on init:
 // struct rxBuf* readBufferPtr = &readBuffer[0];
 // struct rxBuf* processBufferPtr = &readBuffer[1];
@@ -315,7 +315,7 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState)
 
 static void srxl2DataReceive(uint16_t character, void *data)
 {
-    struct SRXL2Bus *bus = (struct SRXL2Bus *)data;
+    SRXL2Bus *bus = (SRXL2Bus *)data;
 
     bus->lastReceiveTimestamp = microsISR();
 
@@ -332,7 +332,7 @@ static void srxl2DataReceive(uint16_t character, void *data)
 
 static void srxl2Idle(void* data)
 {
-    struct SRXL2Bus *bus = (struct SRXL2Bus *)data;
+    SRXL2Bus *bus = (SRXL2Bus *)data;
 
     if (bus->transmittingTelemetry) { // Transmitting telemetry triggers idle interrupt as well. We dont want to change buffers then
         bus->transmittingTelemetry = false;
