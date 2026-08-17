@@ -300,6 +300,7 @@ bool sbusOutIsEnabled(void)
 
 void sbusOutInit(void)
 {
+#if 0
     const serialPortConfig_t *portConfig =
         findSerialPortConfig(FUNCTION_SBUS_OUT);
 
@@ -314,4 +315,8 @@ void sbusOutInit(void)
             (sbusOutConfig()->inverted ? SERIAL_INVERTED : SERIAL_NOT_INVERTED) |
             SERIAL_UNIDIR |
             (sbusOutConfig()->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP));
+#else
+    sbusOutPort = NULL;
+    return;
+#endif
 }

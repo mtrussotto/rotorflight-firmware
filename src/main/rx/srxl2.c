@@ -569,6 +569,7 @@ void validateAndFixSrxl2Config(void)
     rxConfigMutable()->halfDuplex = true;
 }
 
+#include "pg/sbus_output.h"
 static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
 {
     const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
@@ -591,6 +592,26 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
                  );
     if (srxl2bus[SRXL2_PRIMARY_BUS].serialPort)
         srxl2bus[SRXL2_PRIMARY_BUS].serialPort->idleCallback = srxl2Idle;
+
+    const serialPortConfig_t* portConfig2 = findSerialPortConfig(FUNCTION_SBUS_OUT);
+
+    if (!portConfig2) {
+        return;
+    }
+
+    srxl2bus[1].serialPort = openSerialPort(
+                     portConfig2->identifier,
+                     FUNCTION_SBUS_OUT,
+                     srxl2DataReceive,
+                     &srxl2bus[1],
+                     SRXL2_PORT_BAUDRATE_DEFAULT,
+                     SRXL2_PORT_MODE,
+                     SRXL2_PORT_OPTIONS |
+                     (sbusOutConfig()->inverted ? SERIAL_INVERTED : SERIAL_NOT_INVERTED) |
+                     SERIAL_BIDIR |
+                     (sbusOutConfig()->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP));
+    if (srxl2bus[1].serialPort)
+        srxl2bus[1].serialPort->idleCallback = srxl2Idle;
 }
 
 void srxl2RxEarlyInit(const rxConfig_t *rxConfig)
