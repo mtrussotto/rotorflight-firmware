@@ -607,11 +607,14 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
     if (srxl2bus[SRXL2_PRIMARY_BUS].serialPort)
         srxl2bus[SRXL2_PRIMARY_BUS].serialPort->idleCallback = srxl2Idle;
 
+    DEBUG_PRINTF("Trying to find SRXL2 satellite 1\r\n");
     const serialPortConfig_t* portConfig2 = findSerialPortConfig(FUNCTION_SBUS_OUT);
 
     if (!portConfig2) {
+        DEBUG_PRINTF("No port config for SRXL2 satellite 1\r\n");
         return;
     }
+    DEBUG_PRINTF("Found port config for SRXL2 satellite 1\r\n");
 
     srxl2bus[1].serialPort = openSerialPort(
                      portConfig2->identifier,
@@ -626,6 +629,7 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
                      (sbusOutConfig()->pinSwap ? SERIAL_PINSWAP : SERIAL_NOSWAP));
     if (srxl2bus[1].serialPort)
         srxl2bus[1].serialPort->idleCallback = srxl2Idle;
+    DEBUG_PRINTF("Found serial port for SRXL2 satellite 1: %s\r\n", srxl2bus[1].serialPort ? "Yes" : "No");
 }
 
 void srxl2RxEarlyInit(const rxConfig_t *rxConfig)
