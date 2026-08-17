@@ -18,6 +18,7 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <machine/endian.h>
 #include <string.h>
 
 #include "platform.h"
@@ -114,6 +115,7 @@ typedef struct SRXL2Bus {
     serialPort_t *serialPort;
     uint8_t busMasterDeviceId;
     bool telemetryRequested;
+    uint16_t frameLosses;
 } SRXL2Bus;
 #define SRXL2_MAX_BUSES 2
 #define SRXL2_PRIMARY_BUS 0
@@ -143,7 +145,7 @@ static void srxl2SendHandshake(uint8_t destDeviceId, SRXL2Bus *bus)
         .payload = {
             .sourceDeviceId = ((FlightController << 4) | bus->unitId),
             .destinationDeviceId = destDeviceId,
-            .priority = 10,
+            .priority = (bus == &srxl2bus[SRXL2_PRIMARY_BUS])?10:20,
             .baudSupported = bus->baudRate,
             .info = 0,
             .uniqueId = SRXL2_U_ID_2, /* this isn't very unique */
@@ -227,12 +229,19 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
     const Srxl2ControlDataSubHeader* controlData = (Srxl2ControlDataSubHeader*)(header + 1);
     const uint8_t ownId = (FlightController << 4) | bus->unitId;
     if (controlData->replyId == ownId) {
-        bus->telemetryRequested = true;
-        // DEBUG_PRINTF("command: %x replyId: %x ownId: %x bus: %d\r\n", controlData->command, controlData->replyId, ownId, bus - srxl2bus);
+        if (bus != &srxl2bus[SRXL2_PRIMARY_BUS]) {
+            DEBUG_PRINTF("command: %x replyId: %x ownId: %x bus: %d\r\n", controlData->command, controlData->replyId, ownId, bus - srxl2bus);
+            uint8_t emptyTelemetryFrame[22] = {SRXL2_ID, TelemetrySensorData, 22};
+            srxl2RxWriteData(emptyTelemetryFrame, 22, bus);
+        } else {
+            bus->telemetryRequested = true;
+            // DEBUG_PRINTF("command: %x replyId: %x ownId: %x bus: %d\r\n", controlData->command, controlData->replyId, ownId, bus - srxl2bus);
+        }
     }
 
     switch (controlData->command) {
     case ChannelData:
+        bus->frameLosses = ((const Srxl2ChannelDataHeader *) (controlData + 1))->frameLosses;
         if ((rxRuntimeState->lastRcFrameTimeUs >= bus->lastIdleTimestamp) ||
             (bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_SAME_FRAME_US) {
             // DEBUG_PRINTF("Ignoring channel data on bus %d because good data has been retrieved %ld\r\n",
@@ -811,6 +820,15 @@ void srxl2FinalizeFrame(sbuf_t *dst)
 {
   sbufSwitchToReader(dst, telemetryFrame);
   // Include 2 additional bytes of length since we're letting the srxl2RxWriteData function add the CRC in
+  uint8_t *data = sbufPtr(dst);
+  if (data[4] == 0x7F /*SRXL_FRAMETYPE_TELE_QOS*/) {
+      uint16_t *data2 = (uint16_t*)&data[10];
+      if (*data2 == 0xFFFF)
+          *data2 = __htons(srxl2bus[SRXL2_PRIMARY_BUS].frameLosses);
+      data2++;
+      if (*data2 == 0xFFFF && srxl2bus[1].serialPort)
+          *data2 = __htons(srxl2bus[1].frameLosses);
+  }
   srxl2RxWriteData(sbufPtr(dst), sbufBytesRemaining(dst) + 2, &srxl2bus[SRXL2_PRIMARY_BUS]);
   srxl2bus[SRXL2_PRIMARY_BUS].telemetryRequested = false;
 }
