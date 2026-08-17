@@ -779,8 +779,10 @@ void srxl2escDataReceive(uint16_t character, void *data)
     }
 }
 
-void srxl2escIdle()
+void srxl2escIdle(void* data)
 {
+    UNUSED(data);
+    
     if (readBufferIdx == 0) { // No data received
         readBufferPtr->len = 0;
         return;

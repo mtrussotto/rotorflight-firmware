@@ -320,8 +320,10 @@ static void srxl2DataReceive(uint16_t character, void *data)
     }
 }
 
-static void srxl2Idle(void)
+static void srxl2Idle(void* data)
 {
+    UNUSED(data);
+
     if (transmittingTelemetry) { // Transmitting telemetry triggers idle interrupt as well. We dont want to change buffers then
         transmittingTelemetry = false;
     }

@@ -403,7 +403,7 @@ FAST_IRQ_HANDLER void uartIrqHandler(uartPort_t *s)
 
     if (__HAL_UART_GET_IT(huart, UART_IT_IDLE)) {
         if (s->port.idleCallback) {
-            s->port.idleCallback();
+            s->port.idleCallback(s->port.rxCallbackData);
         }
 
         __HAL_UART_CLEAR_IDLEFLAG(huart);
