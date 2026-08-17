@@ -117,11 +117,14 @@ typedef struct SRXL2Bus {
 } SRXL2Bus;
 #define SRXL2_MAX_BUSES 2
 #define SRXL2_PRIMARY_BUS 0
-SRXL2Bus srxl2bus[SRXL2_MAX_BUSES];
-// Must set these members on init:
-// struct rxBuf* readBufferPtr = &readBuffer[0];
-// struct rxBuf* processBufferPtr = &readBuffer[1];
-// static uint8_t busMasterDeviceId = 0xFF;
+SRXL2Bus srxl2bus[SRXL2_MAX_BUSES] = {
+    // Must set these members on init for devs > 0
+    {
+        .readBufferPtr = &srxl2bus[0].readBuffer[0],
+        .processBufferPtr = &srxl2bus[0].readBuffer[1],
+        .busMasterDeviceId = 0xFF,
+    }
+};
 
 static uint8_t telemetryFrame[22];
 
