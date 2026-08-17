@@ -240,7 +240,10 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
         break;
 
     case FailsafeChannelData: {
-        if ((micros() - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_SAME_FRAME_US) {
+        // Because failsafe data can be out of sync with a transmitter, we ignore it for an
+        // entire frame period after getting good data rather than expecting it to be within 1/10
+        // of a frame period.
+        if ((bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_FRAME_PERIOD_US) {
             DEBUG_PRINTF("Ignoring failsafe data on bus %d because good data has been retrieved\r\n",
                          bus - srxl2bus);
             break;
@@ -493,13 +496,24 @@ static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus
 static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
 {
     uint8_t result = RX_FRAME_FAILSAFE | RX_FRAME_DROPPED;
+    bool frameComplete = false;
     for (int i = 0; i < SRXL2_MAX_BUSES; i++) {
         if (srxl2bus[i].serialPort) {
             uint8_t bus_result = srxl2FrameStatusPerBus(rxRuntimeState, &srxl2bus[i]);
             // If any receiever requires frame processing, we ask for it.  If any receiver gets
-            // a compete frame, we report that.  We report failsafes or drops only if all
-            // receievers report them.
-            result |= bus_result & (RX_FRAME_PROCESSING_REQUIRED | RX_FRAME_COMPLETE);
+            // a complete frame with no issues, we report that (ignoring drops/failsafes).
+            // Otherwise, if any receiver drops or failsafes, we report that.
+            result |= bus_result & RX_FRAME_PROCESSING_REQUIRED;
+            if (!frameComplete) {
+                if ((bus_result & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED | RX_FRAME_COMPLETE)) == RX_FRAME_COMPLETE) {
+                    result &= ~(RX_FRAME_FAILSAFE | RX_FRAME_DROPPED);
+                    result |= RX_FRAME_COMPLETE;
+                    frameComplete = true;
+                } else {
+                    result |= bus_result &
+                        (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED | RX_FRAME_COMPLETE);
+                }
+            }
             result &= (~(RX_FRAME_FAILSAFE | RX_FRAME_DROPPED)) | bus_result;
         }
     }
@@ -708,7 +722,7 @@ bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
     rxRuntimeState->rcFrameTimeUsFn = rxFrameTimeUs;
     rxRuntimeState->rcProcessFrameFn = srxl2ProcessFrame;
 
-    // Serial port may have been initialized in srxl2EarlyInit()
+    // Serial ports may have been initialized in srxl2EarlyInit()
     if (!srxl2bus[SRXL2_PRIMARY_BUS].serialPort) {
         srxl2InitSerialPort(rxConfig);
     }
@@ -716,8 +730,12 @@ bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
         return false;
     }
 
-    srxl2bus[SRXL2_PRIMARY_BUS].state = ListenForActivity;
-    srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = micros() + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+    for (size_t i = 0; i < SRXL2_MAX_BUSES; ++i) {
+        if (srxl2bus[i].serialPort) {
+            srxl2bus[i].state = ListenForActivity;
+            srxl2bus[i].timeoutTimestamp = micros() + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+        }
+    }
 
     if (rssiSource == RSSI_SOURCE_NONE) {
         rssiSource = RSSI_SOURCE_RX_PROTOCOL;
