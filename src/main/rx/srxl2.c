@@ -535,11 +535,11 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
         serialPort->idleCallback = srxl2Idle;
 }
 
-void srxl2InitSmartThrottle(const rxConfig_t *rxConfig)
+void srxl2RxEarlyInit(const rxConfig_t *rxConfig)
 {
-    // Get smart throttle devices to switch to SRXL2 mode, which must be done very shortly (<<
-    // 200ms) after receiver power-on.  This is only done if our own unit ID is 0 (as specified
-    // in the SRXL2 protocol)
+    // Get full size receivers to switch to SRXL2 mode. This must be done very shortly (less than
+    // 200ms) after receiver power-on, or the receiver port (typically port "1") will revert to
+    // PWM.  This is only done if our own unit ID is 0 (as specified in the SRXL2 protocol)
     //
     // This does not implement the entire handshake algorithm, because that could take a long
     // time and delay initialization -- e.g. the AR6610T polls 10 devices, taking about 30ms
@@ -562,7 +562,7 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig)
     if (!serialPort) {
         return;
     }
-    DEBUG_PRINTF("Running SRXL2 Smart Throttle init\r\n");
+    DEBUG_PRINTF("Running srxl2RxEarlyInit\r\n");
     uint32_t start_micros = micros();
     uint32_t now = start_micros;
     while ((now - start_micros) < 50000) {
@@ -581,7 +581,7 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig)
         // transmit, and since we don't count the associated idle, prevent a subsequent
         // transmission.
         lastReceiveTimestamp = 0;
-        DEBUG_PRINTF("SmartStart: Sending handshake to 0 (%d)\r\n", i);
+        DEBUG_PRINTF("srlx2RxEarlyInit: Sending handshake to 0 (%d)\r\n", i);
         srxl2SendHandshake(SRXL2_DEVICE_ID_NONE);
         start_micros = now;
         while ((now - start_micros) < 50000) {
@@ -594,14 +594,14 @@ void srxl2InitSmartThrottle(const rxConfig_t *rxConfig)
                 processBufferPtr->len = 0;
                 if (packetIsValid) {
                     // We don't process this packet because we're not fully initialized.
-                    DEBUG_PRINTF("Exiting smart throttle init successfully\r\n");
+                    DEBUG_PRINTF("Exiting srxl2RxEarlyInit successfully\r\n");
                     return;
                 }
             }
             now = micros();
         }
     }
-    DEBUG_PRINTF("Exiting smart throttle init without seeing activity\r\n");
+    DEBUG_PRINTF("Exiting srxl2RxEarlyInit init without seeing activity\r\n");
 }
 
 bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
@@ -623,7 +623,7 @@ bool srxl2RxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
     rxRuntimeState->rcFrameTimeUsFn = rxFrameTimeUs;
     rxRuntimeState->rcProcessFrameFn = srxl2ProcessFrame;
 
-    // Serial port may have been initialized in srxl2InitSmartThrottle()
+    // Serial port may have been initialized in srxl2EarlyInit()
     if (!serialPort) {
         srxl2InitSerialPort(rxConfig);
     }
