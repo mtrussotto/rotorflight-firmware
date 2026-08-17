@@ -542,7 +542,7 @@ void init(void)
 #endif
 
 #ifdef USE_SERIALRX_SRXL2
-    srxl2InitSmartThrottle(rxConfig());
+    srxl2RxEarlyInit(rxConfig());
 #endif
 
     mixerInit();
