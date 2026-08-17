@@ -215,7 +215,7 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
         channelMask &= ~mask;
     }
 
-     DEBUG_PRINTF("channel data: %d %d %lx\r\n", channelData->rssi, channelData->frameLosses, channelData->channelMask.u32);
+    // DEBUG_PRINTF("channel data: %d %d %lx\r\n", channelData->rssi, channelData->frameLosses, channelData->channelMask.u32);
 }
 
 bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState,
@@ -225,15 +225,15 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
     const uint8_t ownId = (FlightController << 4) | bus->unitId;
     if (controlData->replyId == ownId) {
         bus->telemetryRequested = true;
-        DEBUG_PRINTF("command: %x replyId: %x ownId: %x bus: %d\r\n", controlData->command, controlData->replyId, ownId, bus - srxl2bus);
+        // DEBUG_PRINTF("command: %x replyId: %x ownId: %x bus: %d\r\n", controlData->command, controlData->replyId, ownId, bus - srxl2bus);
     }
 
     switch (controlData->command) {
     case ChannelData:
         if ((rxRuntimeState->lastRcFrameTimeUs >= bus->lastIdleTimestamp) ||
             (bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_SAME_FRAME_US) {
-            DEBUG_PRINTF("Ignoring channel data on bus %d because good data has been retrieved %ld\r\n",
-                         bus - srxl2bus, bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs);
+            // DEBUG_PRINTF("Ignoring channel data on bus %d because good data has been retrieved %ld\r\n",
+            //              bus - srxl2bus, bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs);
             break;
         }
         srxl2ProcessChannelData((const Srxl2ChannelDataHeader *) (controlData + 1), rxRuntimeState);
@@ -244,8 +244,8 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
         // entire frame period after getting good data rather than expecting it to be within 1/10
         // of a frame period.
         if ((bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_FRAME_PERIOD_US) {
-            DEBUG_PRINTF("Ignoring failsafe data on bus %d because good data has been retrieved\r\n",
-                         bus - srxl2bus);
+            // DEBUG_PRINTF("Ignoring failsafe data on bus %d because good data has been retrieved\r\n",
+            //              bus - srxl2bus);
             break;
         }
         globalResult |= RX_FRAME_FAILSAFE;
