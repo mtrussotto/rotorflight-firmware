@@ -315,45 +315,45 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState)
 
 static void srxl2DataReceive(uint16_t character, void *data)
 {
-    UNUSED(data);
+    struct SRXL2Bus *bus = (struct SRXL2Bus *)data;
 
-    srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp = microsISR();
+    bus->lastReceiveTimestamp = microsISR();
 
     //If the buffer len is not reset for whatever reason, disable reception
-    if (srxl2bus[SRXL2_PRIMARY_BUS].readBufferPtr->len > 0 || srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx >= SRXL2_MAX_PACKET_LENGTH) {
-        srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx = 0;
+    if (bus->readBufferPtr->len > 0 || bus->readBufferIdx >= SRXL2_MAX_PACKET_LENGTH) {
+        bus->readBufferIdx = 0;
         globalResult = RX_FRAME_DROPPED;
     }
     else {
-        srxl2bus[SRXL2_PRIMARY_BUS].readBufferPtr->packet.raw[srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx] = character;
-        srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx++;
+        bus->readBufferPtr->packet.raw[bus->readBufferIdx] = character;
+        bus->readBufferIdx++;
     }
 }
 
 static void srxl2Idle(void* data)
 {
-    UNUSED(data);
+    struct SRXL2Bus *bus = (struct SRXL2Bus *)data;
 
-    if (srxl2bus[SRXL2_PRIMARY_BUS].transmittingTelemetry) { // Transmitting telemetry triggers idle interrupt as well. We dont want to change buffers then
-        srxl2bus[SRXL2_PRIMARY_BUS].transmittingTelemetry = false;
+    if (bus->transmittingTelemetry) { // Transmitting telemetry triggers idle interrupt as well. We dont want to change buffers then
+        bus->transmittingTelemetry = false;
     }
-    else if (srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx == 0) { // Packet was invalid
-        srxl2bus[SRXL2_PRIMARY_BUS].readBufferPtr->len = 0;
+    else if (bus->readBufferIdx == 0) { // Packet was invalid
+        bus->readBufferPtr->len = 0;
     }
     else {
-        srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp = microsISR();
+        bus->lastIdleTimestamp = microsISR();
         //Swap read and process buffer pointers
-        if (srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr == &srxl2bus[SRXL2_PRIMARY_BUS].readBuffer[0]) {
-            srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr = &srxl2bus[SRXL2_PRIMARY_BUS].readBuffer[1];
-            srxl2bus[SRXL2_PRIMARY_BUS].readBufferPtr = &srxl2bus[SRXL2_PRIMARY_BUS].readBuffer[0];
+        if (bus->processBufferPtr == &bus->readBuffer[0]) {
+            bus->processBufferPtr = &bus->readBuffer[1];
+            bus->readBufferPtr = &bus->readBuffer[0];
         } else {
-            srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr = &srxl2bus[SRXL2_PRIMARY_BUS].readBuffer[0];
-            srxl2bus[SRXL2_PRIMARY_BUS].readBufferPtr = &srxl2bus[SRXL2_PRIMARY_BUS].readBuffer[1];
+            bus->processBufferPtr = &bus->readBuffer[0];
+            bus->readBufferPtr = &bus->readBuffer[1];
         }
-        srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len = srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx;
+        bus->processBufferPtr->len = bus->readBufferIdx;
     }
 
-    srxl2bus[SRXL2_PRIMARY_BUS].readBufferIdx = 0;
+    bus->readBufferIdx = 0;
 }
 
 static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
@@ -535,7 +535,7 @@ static void srxl2InitSerialPort(const rxConfig_t *rxConfig)
                      portConfig->identifier,
                      FUNCTION_RX_SERIAL,
                      srxl2DataReceive,
-                     NULL,
+                     &srxl2bus[SRXL2_PRIMARY_BUS],
                      SRXL2_PORT_BAUDRATE_DEFAULT,
                      SRXL2_PORT_MODE,
                      SRXL2_PORT_OPTIONS |
