@@ -57,6 +57,7 @@
 
 #define SRXL2_MAX_CHANNELS             32
 #define SRXL2_FRAME_PERIOD_US   11000 // 5500 for DSMR
+#define SRXL2_SAME_FRAME_US            (SRXL2_FRAME_PERIOD_US / 10)
 #define SRXL2_CHANNEL_SHIFT            2
 #define SRXL2_CHANNEL_CENTER           0x8000
 
@@ -126,7 +127,9 @@ static uint8_t telemetryFrame[22];
 
 uint8_t globalResult = 0;
 
-static void srxl2SendHandshake(uint8_t destDeviceId)
+static void srxl2RxWriteData(const void *data, int len, SRXL2Bus *bus);
+
+static void srxl2SendHandshake(uint8_t destDeviceId, SRXL2Bus *bus)
 {
     Srxl2HandshakeFrame response = {
         .header = {
@@ -135,16 +138,16 @@ static void srxl2SendHandshake(uint8_t destDeviceId)
             .length = sizeof(Srxl2HandshakeFrame),
         },
         .payload = {
-            .sourceDeviceId = ((FlightController << 4) | srxl2bus[SRXL2_PRIMARY_BUS].unitId),
+            .sourceDeviceId = ((FlightController << 4) | bus->unitId),
             .destinationDeviceId = destDeviceId,
             .priority = 10,
-            .baudSupported = srxl2bus[SRXL2_PRIMARY_BUS].baudRate,
+            .baudSupported = bus->baudRate,
             .info = 0,
             .uniqueId = SRXL2_U_ID_2, /* this isn't very unique */
         }
     };
 
-    srxl2RxWriteData(&response, sizeof(response));
+    srxl2RxWriteData(&response, sizeof(response), bus);
 }
 
 /* handshake protocol
@@ -159,31 +162,32 @@ static void srxl2SendHandshake(uint8_t destDeviceId)
 
 // if 50ms with not activity, go to default baudrate and to step 1
 
-bool srxl2ProcessHandshake(const Srxl2Header* header)
+bool srxl2ProcessHandshake(const Srxl2Header* header, SRXL2Bus *bus)
 {
     const Srxl2HandshakeSubHeader* handshake = (Srxl2HandshakeSubHeader*)(header + 1);
     if (handshake->destinationDeviceId == Broadcast) {
-        DEBUG_PRINTF("broadcast handshake from %x\r\n", handshake->sourceDeviceId);
-        srxl2bus[SRXL2_PRIMARY_BUS].busMasterDeviceId = handshake->sourceDeviceId;
+        DEBUG_PRINTF("broadcast handshake from %x on bus %d\r\n", handshake->sourceDeviceId,
+                     bus - srxl2bus);
+        bus->busMasterDeviceId = handshake->sourceDeviceId;
 
         if (handshake->baudSupported == 1) {
-            serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_HIGH);
+            serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_HIGH);
             DEBUG_PRINTF("switching to %d baud\r\n", SRXL2_PORT_BAUDRATE_HIGH);
         }
 
-        srxl2bus[SRXL2_PRIMARY_BUS].state = Running;
+        bus->state = Running;
 
         return true;
     }
 
 
-    if (handshake->destinationDeviceId != ((FlightController << 4) | srxl2bus[SRXL2_PRIMARY_BUS].unitId)) {
+    if (handshake->destinationDeviceId != ((FlightController << 4) | bus->unitId)) {
         return true;
     }
 
-    DEBUG_PRINTF("FC handshake from %x\r\n", handshake->sourceDeviceId);
+    DEBUG_PRINTF("FC handshake from %x on bus %d\r\n", handshake->sourceDeviceId, bus - srxl2bus);
 
-    srxl2SendHandshake(handshake->sourceDeviceId);
+    srxl2SendHandshake(handshake->sourceDeviceId, bus);
 
     return true;
 }
@@ -214,21 +218,33 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
      DEBUG_PRINTF("channel data: %d %d %lx\r\n", channelData->rssi, channelData->frameLosses, channelData->channelMask.u32);
 }
 
-bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState)
+bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState,
+                             SRXL2Bus *bus)
 {
     const Srxl2ControlDataSubHeader* controlData = (Srxl2ControlDataSubHeader*)(header + 1);
-    const uint8_t ownId = (FlightController << 4) | srxl2bus[SRXL2_PRIMARY_BUS].unitId;
+    const uint8_t ownId = (FlightController << 4) | bus->unitId;
     if (controlData->replyId == ownId) {
-        srxl2bus[SRXL2_PRIMARY_BUS].telemetryRequested = true;
+        bus->telemetryRequested = true;
         DEBUG_PRINTF("command: %x replyId: %x ownId: %x\r\n", controlData->command, controlData->replyId, ownId);
     }
 
     switch (controlData->command) {
     case ChannelData:
+        if ((rxRuntimeState->lastRcFrameTimeUs >= bus->lastIdleTimestamp) ||
+            (bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_SAME_FRAME_US) {
+            DEBUG_PRINTF("Ignoring channel data on bus %d because good data has been retrieved\r\n",
+                         bus - srxl2bus);
+            break;
+        }
         srxl2ProcessChannelData((const Srxl2ChannelDataHeader *) (controlData + 1), rxRuntimeState);
         break;
 
     case FailsafeChannelData: {
+        if ((micros() - rxRuntimeState->lastRcFrameTimeUs) < SRXL2_SAME_FRAME_US) {
+            DEBUG_PRINTF("Ignoring failsafe data on bus %d because good data has been retrieved\r\n",
+                         bus - srxl2bus);
+            break;
+        }
         globalResult |= RX_FRAME_FAILSAFE;
         setRssiDirect(0, RSSI_SOURCE_RX_PROTOCOL);
         // DEBUG_PRINTF("fs channel data\r\n");
@@ -260,30 +276,30 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
     return true;
 }
 
-bool srxl2ProcessPacket(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState)
+bool srxl2ProcessPacket(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState, SRXL2Bus *bus)
 {
     switch (header->packetType) {
     case Handshake:
-        return srxl2ProcessHandshake(header);
+        return srxl2ProcessHandshake(header, bus);
     case ControlData:
-        return srxl2ProcessControlData(header, rxRuntimeState);
+        return srxl2ProcessControlData(header, rxRuntimeState, bus);
     default:
-        DEBUG_PRINTF("Other packet type, ID: %x \r\n", header->packetType);
+        DEBUG_PRINTF("Other packet type, ID: %x on bus %d\r\n", header->packetType, bus - srxl2bus);
         break;
     }
 
     return false;
 }
 
-bool srxl2IsPacketValid(void)
+bool srxl2IsPacketValid(SRXL2Bus *bus)
 {
-    if (srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header.id != SRXL2_ID || srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len != srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header.length) {
-        DEBUG_PRINTF("invalid header id: %x, or length: %x received vs %x expected \r\n", srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header.id, srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len, srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header.length);
+    if (bus->processBufferPtr->packet.header.id != SRXL2_ID || bus->processBufferPtr->len != bus->processBufferPtr->packet.header.length) {
+        DEBUG_PRINTF("invalid header id: %x, or length: %x received vs %x expected \r\n", bus->processBufferPtr->packet.header.id, bus->processBufferPtr->len, bus->processBufferPtr->packet.header.length);
         globalResult = RX_FRAME_DROPPED;
         return false;
     }
 
-    const uint16_t calculatedCrc = crc16_ccitt_update(0, srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.raw, srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header.length);
+    const uint16_t calculatedCrc = crc16_ccitt_update(0, bus->processBufferPtr->packet.raw, bus->processBufferPtr->packet.header.length);
 
     //Invalid if crc non-zero
     if (calculatedCrc) {
@@ -295,20 +311,20 @@ bool srxl2IsPacketValid(void)
 }
 
 // @note assumes packet is fully there
-void srxl2Process(rxRuntimeState_t *rxRuntimeState)
+void srxl2Process(rxRuntimeState_t *rxRuntimeState, SRXL2Bus* bus)
 {
-    if (!srxl2IsPacketValid()) {
+    if (!srxl2IsPacketValid(bus)) {
         return;
     }
 
     //Packet is valid only after ID and CRC check out
-    srxl2bus[SRXL2_PRIMARY_BUS].lastValidPacketTimestamp = micros();
+    bus->lastValidPacketTimestamp = micros();
 
-    if (srxl2ProcessPacket(&srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header, rxRuntimeState)) {
+    if (srxl2ProcessPacket(&bus->processBufferPtr->packet.header, rxRuntimeState, bus)) {
         return;
     }
 
-    DEBUG_PRINTF("could not parse packet: %x\r\n", srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->packet.header.packetType);
+    DEBUG_PRINTF("could not parse packet: %x on bus %d\r\n", bus->processBufferPtr->packet.header.packetType, bus - srxl2bus);
     globalResult = RX_FRAME_DROPPED;
 }
 
@@ -356,145 +372,175 @@ static void srxl2Idle(void* data)
     bus->readBufferIdx = 0;
 }
 
-static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
+static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus *bus)
 {
     UNUSED(rxRuntimeState);
-
+    
+#if SRXL2_DEBUG
+    int busnum = bus - srxl2bus;
+#endif
     globalResult = RX_FRAME_PENDING;
 
     // len should only be set after an idle interrupt (packet reception complete)
-    if (srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr != NULL && srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len) {
-        srxl2Process(rxRuntimeState);
-        srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len = 0;
+    if (bus->processBufferPtr != NULL && bus->processBufferPtr->len) {
+        srxl2Process(rxRuntimeState, bus);
+        bus->processBufferPtr->len = 0;
     }
 
     uint8_t result = globalResult;
 
     const uint32_t now = micros();
 
-    switch (srxl2bus[SRXL2_PRIMARY_BUS].state) {
+    switch (bus->state) {
     case Disabled: break;
 
     case ListenForActivity: {
         // activity detected
-        if (srxl2bus[SRXL2_PRIMARY_BUS].lastValidPacketTimestamp != 0) {
+        if (bus->lastValidPacketTimestamp != 0) {
             // as ListenForActivity is done at default baud-rate, we don't need to change anything
             // @todo if there were non-handshake packets - go to running,
             // if there were - go to either Send Handshake or Listen For Handshake
-            srxl2bus[SRXL2_PRIMARY_BUS].state = Running;
-        } else if (cmpTimeUs(srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp, srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp) > 0) {
+            bus->state = Running;
+        } else if (cmpTimeUs(bus->lastIdleTimestamp, bus->lastReceiveTimestamp) > 0) {
             // This means we received something invalid.
-            if (srxl2bus[SRXL2_PRIMARY_BUS].baudRate != 0) {
-                uint32_t currentBaud = serialGetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort);
+            if (bus->baudRate != 0) {
+                uint32_t currentBaud = serialGetBaudRate(bus->serialPort);
 
                 if(currentBaud == SRXL2_PORT_BAUDRATE_DEFAULT)
-                    serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_HIGH);
+                    serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_HIGH);
                 else
-                    serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
-                srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp = 0;
+                    serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
+                bus->lastIdleTimestamp = 0;
             }
-        } else if (cmpTimeUs(now, srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp) >= 0) {
+        } else if (cmpTimeUs(now, bus->timeoutTimestamp) >= 0) {
             // @todo if there was activity - detect baudrate and ListenForHandshake
 
-            if (srxl2bus[SRXL2_PRIMARY_BUS].unitId == 0) {
-                srxl2bus[SRXL2_PRIMARY_BUS].state = SendHandshake;
-                srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = now + SRXL2_SEND_HANDSHAKE_TIMEOUT_US;
-                srxl2bus[SRXL2_PRIMARY_BUS].fullTimeoutTimestamp = now + SRXL2_LISTEN_FOR_HANDSHAKE_TIMEOUT_US;
-                srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp = srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp + 1; // Allow transmission
-                DEBUG_PRINTF("Sending first handshake to 0\r\n");
-                serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
-                srxl2SendHandshake(SRXL2_DEVICE_ID_NONE);
+            if (bus->unitId == 0) {
+                bus->state = SendHandshake;
+                bus->timeoutTimestamp = now + SRXL2_SEND_HANDSHAKE_TIMEOUT_US;
+                bus->fullTimeoutTimestamp = now + SRXL2_LISTEN_FOR_HANDSHAKE_TIMEOUT_US;
+                bus->lastIdleTimestamp = bus->lastReceiveTimestamp + 1; // Allow transmission
+                DEBUG_PRINTF("Sending first handshake to 0 on bus %d\r\n", busnum);
+                serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
+                srxl2SendHandshake(SRXL2_DEVICE_ID_NONE, bus);
                 result |= RX_FRAME_PROCESSING_REQUIRED;
             } else {
-                srxl2bus[SRXL2_PRIMARY_BUS].state = ListenForHandshake;
-                srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = now + SRXL2_LISTEN_FOR_HANDSHAKE_TIMEOUT_US;
+                bus->state = ListenForHandshake;
+                bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_HANDSHAKE_TIMEOUT_US;
             }
         }
     } break;
 
     case SendHandshake: {
-        if (srxl2bus[SRXL2_PRIMARY_BUS].lastValidPacketTimestamp != 0) {
-            srxl2bus[SRXL2_PRIMARY_BUS].state = Running;
-        } else if (cmpTimeUs(now, srxl2bus[SRXL2_PRIMARY_BUS].fullTimeoutTimestamp) >= 0) {
-            serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
-            DEBUG_PRINTF("case SendHandshake: switching to %d baud\r\n", SRXL2_PORT_BAUDRATE_DEFAULT);
-            srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+        if (bus->lastValidPacketTimestamp != 0) {
+            bus->state = Running;
+        } else if (cmpTimeUs(now, bus->fullTimeoutTimestamp) >= 0) {
+            serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
+            DEBUG_PRINTF("case SendHandshake: switching to %d baud on bus %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, busnum);
+            bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
-            srxl2bus[SRXL2_PRIMARY_BUS].state = ListenForActivity;
-            srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp = 0;
-        } else if (cmpTimeUs(now, srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp) >= 0) {
-            srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = now + SRXL2_SEND_HANDSHAKE_TIMEOUT_US;
-            srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp = srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp + 1; // Allow transmission
-            DEBUG_PRINTF("Sending handshake to 0\r\n");
-            srxl2SendHandshake(SRXL2_DEVICE_ID_NONE);
+            bus->state = ListenForActivity;
+            bus->lastReceiveTimestamp = 0;
+        } else if (cmpTimeUs(now, bus->timeoutTimestamp) >= 0) {
+            bus->timeoutTimestamp = now + SRXL2_SEND_HANDSHAKE_TIMEOUT_US;
+            bus->lastIdleTimestamp = bus->lastReceiveTimestamp + 1; // Allow transmission
+            DEBUG_PRINTF("Sending handshake to 0 on bus %d\r\n", busnum);
+            srxl2SendHandshake(SRXL2_DEVICE_ID_NONE, bus);
             result |= RX_FRAME_PROCESSING_REQUIRED;
         }
 
     } break;
 
     case ListenForHandshake: {
-        if (cmpTimeUs(now, srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp) >= 0)  {
-            serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
-            DEBUG_PRINTF("case ListenForHandshake: switching to %d baud\r\n", SRXL2_PORT_BAUDRATE_DEFAULT);
-            srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+        if (cmpTimeUs(now, bus->timeoutTimestamp) >= 0)  {
+            serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
+            DEBUG_PRINTF("case ListenForHandshake: switching to %d baud on bus %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, busnum);
+            bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
-            srxl2bus[SRXL2_PRIMARY_BUS].state = ListenForActivity;
-            srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp = 0;
+            bus->state = ListenForActivity;
+            bus->lastReceiveTimestamp = 0;
         }
     } break;
 
     case Running: {
         // frame timed out, reset state
-        if (cmpTimeUs(now, srxl2bus[SRXL2_PRIMARY_BUS].lastValidPacketTimestamp) >= SRXL2_FRAME_TIMEOUT_US) {
-            serialSetBaudRate(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
-            DEBUG_PRINTF("case Running: switching to %d baud: %ld %ld\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, now, srxl2bus[SRXL2_PRIMARY_BUS].lastValidPacketTimestamp);
-            srxl2bus[SRXL2_PRIMARY_BUS].timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+        if (cmpTimeUs(now, bus->lastValidPacketTimestamp) >= SRXL2_FRAME_TIMEOUT_US) {
+            serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
+            DEBUG_PRINTF("case Running: switching to %d baud: %ld %ld on bus %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, now, bus->lastValidPacketTimestamp, busnum);
+            bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
-            srxl2bus[SRXL2_PRIMARY_BUS].state = ListenForActivity;
-            srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp = 0;
-            srxl2bus[SRXL2_PRIMARY_BUS].lastValidPacketTimestamp = 0;
+            bus->state = ListenForActivity;
+            bus->lastReceiveTimestamp = 0;
+            bus->lastValidPacketTimestamp = 0;
         }
     } break;
     };
 
-    if (srxl2bus[SRXL2_PRIMARY_BUS].writeBufferIdx) {
+    if (bus->writeBufferIdx) {
         result |= RX_FRAME_PROCESSING_REQUIRED;
     }
 
-    if (!(result & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED))) {
-        rxRuntimeState->lastRcFrameTimeUs = srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp;
+    if ((result & RX_FRAME_COMPLETE) && !(result & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED))) {
+        rxRuntimeState->lastRcFrameTimeUs = bus->lastIdleTimestamp;
     }
 
     return result;
 }
 
-static bool srxl2ProcessFrame(const rxRuntimeState_t *rxRuntimeState)
+static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
+{
+    uint8_t result = RX_FRAME_FAILSAFE | RX_FRAME_DROPPED;
+    for (int i = 0; i < SRXL2_MAX_BUSES; i++) {
+        if (srxl2bus[i].serialPort) {
+            uint8_t bus_result = srxl2FrameStatusPerBus(rxRuntimeState, &srxl2bus[i]);
+            // If any receiever requires frame processing, we ask for it.  If any receiver gets
+            // a compete frame, we report that.  We report failsafes or drops only if all
+            // receievers report them.
+            result |= bus_result & (RX_FRAME_PROCESSING_REQUIRED | RX_FRAME_COMPLETE);
+            result &= (~(RX_FRAME_FAILSAFE | RX_FRAME_DROPPED)) | bus_result;
+        }
+    }
+    return result;
+}
+
+static bool srxl2ProcessFramePerBus(const rxRuntimeState_t *rxRuntimeState, SRXL2Bus* bus)
 {
     UNUSED(rxRuntimeState);
 
-    if (srxl2bus[SRXL2_PRIMARY_BUS].writeBufferIdx == 0) {
+    if (bus->writeBufferIdx == 0) {
         return true;
     }
 
     const uint32_t now = micros();
 
-    if (cmpTimeUs(srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp, srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp) > 0) {
+    if (cmpTimeUs(bus->lastIdleTimestamp, bus->lastReceiveTimestamp) > 0) {
         // time sufficient for at least 2 characters has passed
-        if (cmpTimeUs(now, srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp) > SRXL2_REPLY_QUIESCENCE) {
-            srxl2bus[SRXL2_PRIMARY_BUS].transmittingTelemetry = true;
-            serialWriteBuf(srxl2bus[SRXL2_PRIMARY_BUS].serialPort, srxl2bus[SRXL2_PRIMARY_BUS].writeBuffer, srxl2bus[SRXL2_PRIMARY_BUS].writeBufferIdx);
-            srxl2bus[SRXL2_PRIMARY_BUS].writeBufferIdx = 0;
+        if (cmpTimeUs(now, bus->lastReceiveTimestamp) > SRXL2_REPLY_QUIESCENCE) {
+            bus->transmittingTelemetry = true;
+            serialWriteBuf(bus->serialPort, bus->writeBuffer, bus->writeBufferIdx);
+            bus->writeBufferIdx = 0;
         } else {
-            DEBUG_PRINTF("not enough time to send 2 characters passed yet, %ld us since last receive, %d required\r\n", now - srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp, SRXL2_REPLY_QUIESCENCE);
+            DEBUG_PRINTF("not enough time to send 2 characters passed yet, %ld us since last receive, %d required\r\n", now - bus->lastReceiveTimestamp, SRXL2_REPLY_QUIESCENCE);
         }
     } else {
-        DEBUG_PRINTF("still receiving a frame, %ld %ld\r\n", srxl2bus[SRXL2_PRIMARY_BUS].lastIdleTimestamp, srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp);
+        DEBUG_PRINTF("still receiving a frame, %ld %ld bus %d\r\n", bus->lastIdleTimestamp, bus->lastReceiveTimestamp, bus - srxl2bus);
     }
 
     return true;
+}
+
+static bool srxl2ProcessFrame(const rxRuntimeState_t *rxRuntimeState)
+{
+    bool result = true;
+    for (int i = 0; i < SRXL2_MAX_BUSES; i++) {
+        if (srxl2bus[i].serialPort) {
+            result &= srxl2ProcessFramePerBus(rxRuntimeState, &srxl2bus[i]);
+        }
+    }
+    return result;
 }
 
 static float srxl2ReadRawRC(const rxRuntimeState_t *rxRuntimeState, uint8_t channelIdx)
@@ -506,15 +552,15 @@ static float srxl2ReadRawRC(const rxRuntimeState_t *rxRuntimeState, uint8_t chan
     return ((float)(rxRuntimeState->channelData[channelIdx] >> SRXL2_CHANNEL_SHIFT) / 16) + SPEKTRUM_PULSE_OFFSET;
 }
 
-void srxl2RxWriteData(const void *data, int len)
+static void srxl2RxWriteData(const void *data, int len, SRXL2Bus *bus)
 {
     const uint16_t crc = crc16_ccitt_update(0, (uint8_t*)data, len - 2);
     ((uint8_t*)data)[len-2] = ((uint8_t *) &crc)[1] & 0xFF;
     ((uint8_t*)data)[len-1] = ((uint8_t *) &crc)[0] & 0xFF;
 
-    len = MIN(len, (int)sizeof(srxl2bus[SRXL2_PRIMARY_BUS].writeBuffer));
-    memcpy(srxl2bus[SRXL2_PRIMARY_BUS].writeBuffer, data, len);
-    srxl2bus[SRXL2_PRIMARY_BUS].writeBufferIdx = len;
+    len = MIN(len, (int)sizeof(bus->writeBuffer));
+    memcpy(bus->writeBuffer, data, len);
+    bus->writeBufferIdx = len;
 }
 
 void validateAndFixSrxl2Config(void)
@@ -594,15 +640,15 @@ void srxl2RxEarlyInit(const rxConfig_t *rxConfig)
         // transmission.
         srxl2bus[SRXL2_PRIMARY_BUS].lastReceiveTimestamp = 0;
         DEBUG_PRINTF("srlx2RxEarlyInit: Sending handshake to 0 (%d)\r\n", i);
-        srxl2SendHandshake(SRXL2_DEVICE_ID_NONE);
+        srxl2SendHandshake(SRXL2_DEVICE_ID_NONE, &srxl2bus[SRXL2_PRIMARY_BUS]);
         start_micros = now;
         while ((now - start_micros) < 50000) {
             if (srxl2bus[SRXL2_PRIMARY_BUS].writeBufferIdx) {
                 // This writes the handshake packet.
-                srxl2ProcessFrame(NULL);
+                srxl2ProcessFramePerBus(NULL, &srxl2bus[SRXL2_PRIMARY_BUS]);
             }
             if (srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr != NULL && srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len) {
-                bool packetIsValid = srxl2IsPacketValid();
+                bool packetIsValid = srxl2IsPacketValid(&srxl2bus[SRXL2_PRIMARY_BUS]);
                 srxl2bus[SRXL2_PRIMARY_BUS].processBufferPtr->len = 0;
                 if (packetIsValid) {
                     // We don't process this packet because we're not fully initialized.
@@ -684,7 +730,7 @@ void srxl2FinalizeFrame(sbuf_t *dst)
 {
   sbufSwitchToReader(dst, telemetryFrame);
   // Include 2 additional bytes of length since we're letting the srxl2RxWriteData function add the CRC in
-  srxl2RxWriteData(sbufPtr(dst), sbufBytesRemaining(dst) + 2);
+  srxl2RxWriteData(sbufPtr(dst), sbufBytesRemaining(dst) + 2, &srxl2bus[SRXL2_PRIMARY_BUS]);
   srxl2bus[SRXL2_PRIMARY_BUS].telemetryRequested = false;
 }
 
@@ -706,7 +752,7 @@ void srxl2Bind(void)
         }
     };
 
-    srxl2RxWriteData(&bind, length);
+    srxl2RxWriteData(&bind, length, &srxl2bus[SRXL2_PRIMARY_BUS]);
 }
 
 #endif
