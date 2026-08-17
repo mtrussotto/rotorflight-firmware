@@ -188,7 +188,7 @@ bool srxl2ProcessHandshake(const Srxl2Header* header, SRXL2Bus *bus)
         return true;
     }
 
-    DEBUG_PRINTF("FC handshake from %x on bus %d\r\n", handshake->sourceDeviceId, bus - srxl2bus);
+    DEBUG_PRINTF("FC handshake from %x info %x on bus %d\r\n", handshake->sourceDeviceId, handshake->info, bus - srxl2bus);
 
     srxl2SendHandshake(handshake->sourceDeviceId, bus);
 
@@ -282,6 +282,39 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
     return true;
 }
 
+static bool srxl2ProcessBindInfo(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState, SRXL2Bus *bus) {
+    UNUSED(rxRuntimeState);
+    
+    const Srxl2BindInfoPayload* bindInfo = (Srxl2BindInfoPayload*)(header + 1);
+    DEBUG_PRINTF("Bind Info: rq: %x dev: %x bindType: %x options: %x guid: %08lx%08lx uid: %lx bus: %d\r\n",
+                 bindInfo->request, bindInfo->deviceId, bindInfo->bindType,
+                 bindInfo->options, (uint32_t)(bindInfo->guid >> 32), (uint32_t)bindInfo->guid,
+                 bindInfo->uid, bus - srxl2bus);
+    if (bus != &srxl2bus[SRXL2_PRIMARY_BUS] || bindInfo->bindType == NotBound
+                         || bindInfo->request != BoundDataReport)
+        return true;
+    Srxl2BindInfoFrame bind = {
+        .header = {
+            .id = SRXL2_ID,
+            .packetType = BindInfo,
+            .length = sizeof(Srxl2BindInfoFrame),
+        },
+        .payload = {
+            .request = SetBindInfo,
+            .bindType = bindInfo->bindType,
+            .options = bindInfo->options & ~(SRXL_BIND_OPT_TELEM_TX_ENABLE | SRXL_BIND_OPT_BIND_TX_ENABLE),
+            .guid = bindInfo->guid,
+        }
+    };
+    for (int i = 0; i < SRXL2_MAX_BUSES; i++) {
+        if (i != SRXL2_PRIMARY_BUS && srxl2bus[i].serialPort) {
+            bind.payload.deviceId = srxl2bus[i].busMasterDeviceId;
+            srxl2RxWriteData(&bind, bind.header.length, &srxl2bus[i]);
+        }
+    }
+    return true;
+}
+
 bool srxl2ProcessPacket(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeState, SRXL2Bus *bus)
 {
     switch (header->packetType) {
@@ -289,6 +322,8 @@ bool srxl2ProcessPacket(const Srxl2Header* header, rxRuntimeState_t *rxRuntimeSt
         return srxl2ProcessHandshake(header, bus);
     case ControlData:
         return srxl2ProcessControlData(header, rxRuntimeState, bus);
+    case BindInfo:
+        return srxl2ProcessBindInfo(header, rxRuntimeState, bus);
     default:
         DEBUG_PRINTF("Other packet type, ID: %x on bus %d\r\n", header->packetType, bus - srxl2bus);
         break;
