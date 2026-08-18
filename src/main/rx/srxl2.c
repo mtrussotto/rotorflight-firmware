@@ -91,29 +91,29 @@ struct rxBuf {
     Srxl2Frame packet;
 };
 
-struct SRXL2Bus {
-  uint8_t unitId;
-  uint8_t baudRate;
-
-  Srxl2State state;
-  uint32_t timeoutTimestamp;
-  uint32_t fullTimeoutTimestamp;
-  uint32_t lastValidPacketTimestamp;
-  volatile uint32_t lastReceiveTimestamp;
-  volatile uint32_t lastIdleTimestamp;
-
-  struct rxBuf readBuffer[2];
-  struct rxBuf* readBufferPtr;
-  struct rxBuf* processBufferPtr;
-  volatile unsigned readBufferIdx;
-  volatile bool transmittingTelemetry;
-  uint8_t writeBuffer[SRXL2_MAX_PACKET_LENGTH];
-  unsigned writeBufferIdx;
-
-  serialPort_t *serialPort;
-  uint8_t busMasterDeviceId;
-  bool telemetryRequested;
-};
+typedef struct SRXL2Bus {
+    uint8_t unitId;
+    uint8_t baudRate;
+    
+    Srxl2State state;
+    uint32_t timeoutTimestamp;
+    uint32_t fullTimeoutTimestamp;
+    uint32_t lastValidPacketTimestamp;
+    volatile uint32_t lastReceiveTimestamp;
+    volatile uint32_t lastIdleTimestamp;
+    
+    struct rxBuf readBuffer[2];
+    struct rxBuf* readBufferPtr;
+    struct rxBuf* processBufferPtr;
+    volatile unsigned readBufferIdx;
+    volatile bool transmittingTelemetry;
+    uint8_t writeBuffer[SRXL2_MAX_PACKET_LENGTH];
+    unsigned writeBufferIdx;
+    
+    serialPort_t *serialPort;
+    uint8_t busMasterDeviceId;
+    bool telemetryRequested;
+} SRXL2Bus;
 #define SRXL2_MAX_BUSES 2
 #define SRXL2_PRIMARY_BUS 0
 struct SRXL2Bus srxl2bus[SRXL2_MAX_BUSES];
