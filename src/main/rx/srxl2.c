@@ -103,6 +103,7 @@ typedef struct SRXL2Bus {
     uint32_t lastValidPacketTimestamp;
     volatile uint32_t lastReceiveTimestamp;
     volatile uint32_t lastIdleTimestamp;
+    uint32_t lastControlDataTimestamp;
     
     struct rxBuf readBuffer[2];
     struct rxBuf* readBufferPtr;
@@ -115,6 +116,7 @@ typedef struct SRXL2Bus {
     serialPort_t *serialPort;
     uint8_t busMasterDeviceId;
     bool telemetryRequested;
+    uint8_t frameResult;
     uint16_t frameLosses;
 } SRXL2Bus;
 #define SRXL2_MAX_BUSES 2
@@ -129,8 +131,6 @@ SRXL2Bus srxl2bus[SRXL2_MAX_BUSES] = {
 };
 
 static uint8_t telemetryFrame[22];
-
-uint8_t globalResult = 0;
 
 static void srxl2RxWriteData(const void *data, int len, SRXL2Bus *bus);
 
@@ -197,8 +197,9 @@ bool srxl2ProcessHandshake(const Srxl2Header* header, SRXL2Bus *bus)
     return true;
 }
 
-void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntimeState_t *rxRuntimeState) {
-    globalResult = RX_FRAME_COMPLETE;
+void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntimeState_t *rxRuntimeState, SRXL2Bus *bus) {
+    bus->frameResult = RX_FRAME_COMPLETE;
+    bus->lastControlDataTimestamp = bus->lastIdleTimestamp;
 
     if (channelData->rssi >= 0) {
         const int rssiPercent = channelData->rssi;
@@ -207,7 +208,7 @@ void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntim
 
     //If receiver is in a connected state, and a packet is missed, the channel mask will be 0.
     if (!channelData->channelMask.u32) {
-        globalResult |= RX_FRAME_DROPPED;
+        bus->frameResult |= RX_FRAME_DROPPED;
         return;
     }
 
@@ -248,7 +249,7 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
             //              bus - srxl2bus, bus->lastIdleTimestamp - rxRuntimeState->lastRcFrameTimeUs);
             break;
         }
-        srxl2ProcessChannelData((const Srxl2ChannelDataHeader *) (controlData + 1), rxRuntimeState);
+        srxl2ProcessChannelData((const Srxl2ChannelDataHeader *) (controlData + 1), rxRuntimeState, bus);
         break;
 
     case FailsafeChannelData: {
@@ -260,7 +261,8 @@ bool srxl2ProcessControlData(const Srxl2Header* header, rxRuntimeState_t *rxRunt
             //              bus - srxl2bus);
             break;
         }
-        globalResult |= RX_FRAME_FAILSAFE;
+        // Note this does not update the last control data time.
+        bus->frameResult |= RX_FRAME_FAILSAFE;
         setRssiDirect(0, RSSI_SOURCE_RX_PROTOCOL);
         // DEBUG_PRINTF("fs channel data\r\n");
     } break;
@@ -345,7 +347,7 @@ bool srxl2IsPacketValid(SRXL2Bus *bus)
 {
     if (bus->processBufferPtr->packet.header.id != SRXL2_ID || bus->processBufferPtr->len != bus->processBufferPtr->packet.header.length) {
         DEBUG_PRINTF("invalid header id: %x, or length: %x received vs %x expected \r\n", bus->processBufferPtr->packet.header.id, bus->processBufferPtr->len, bus->processBufferPtr->packet.header.length);
-        globalResult = RX_FRAME_DROPPED;
+        bus->frameResult = RX_FRAME_DROPPED;
         return false;
     }
 
@@ -353,7 +355,7 @@ bool srxl2IsPacketValid(SRXL2Bus *bus)
 
     //Invalid if crc non-zero
     if (calculatedCrc) {
-        globalResult = RX_FRAME_DROPPED;
+        bus->frameResult = RX_FRAME_DROPPED;
         DEBUG_PRINTF("crc mismatch %x\r\n", calculatedCrc);
         return false;
     }
@@ -361,8 +363,9 @@ bool srxl2IsPacketValid(SRXL2Bus *bus)
 }
 
 // @note assumes packet is fully there
-void srxl2Process(rxRuntimeState_t *rxRuntimeState, SRXL2Bus* bus)
+static void srxl2Process(rxRuntimeState_t *rxRuntimeState, SRXL2Bus* bus)
 {
+    bus->frameResult = RX_FRAME_PENDING;
     if (!srxl2IsPacketValid(bus)) {
         return;
     }
@@ -375,7 +378,7 @@ void srxl2Process(rxRuntimeState_t *rxRuntimeState, SRXL2Bus* bus)
     }
 
     DEBUG_PRINTF("could not parse packet: %x on bus %d\r\n", bus->processBufferPtr->packet.header.packetType, bus - srxl2bus);
-    globalResult = RX_FRAME_DROPPED;
+    bus->frameResult = RX_FRAME_DROPPED;
 }
 
 
@@ -388,7 +391,7 @@ static void srxl2DataReceive(uint16_t character, void *data)
     //If the buffer len is not reset for whatever reason, disable reception
     if (bus->readBufferPtr->len > 0 || bus->readBufferIdx >= SRXL2_MAX_PACKET_LENGTH) {
         bus->readBufferIdx = 0;
-        globalResult = RX_FRAME_DROPPED;
+        bus->frameResult = RX_FRAME_DROPPED;
     }
     else {
         bus->readBufferPtr->packet.raw[bus->readBufferIdx] = character;
@@ -429,16 +432,15 @@ static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus
 #if SRXL2_DEBUG
     int busnum = bus - srxl2bus;
 #endif
-    globalResult = RX_FRAME_PENDING;
+    uint8_t result = RX_FRAME_PENDING;
 
     // len should only be set after an idle interrupt (packet reception complete)
     if (bus->processBufferPtr != NULL && bus->processBufferPtr->len) {
         srxl2Process(rxRuntimeState, bus);
         bus->processBufferPtr->len = 0;
+        result = bus->frameResult;
     }
-
-    uint8_t result = globalResult;
-
+    
     const uint32_t now = micros();
 
     switch (bus->state) {
