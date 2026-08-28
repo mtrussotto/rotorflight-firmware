@@ -103,7 +103,6 @@ typedef struct SRXL2Bus {
     uint32_t lastValidPacketTimestamp;
     volatile uint32_t lastReceiveTimestamp;
     volatile uint32_t lastIdleTimestamp;
-    uint32_t lastControlDataTimestamp;
     
     struct rxBuf readBuffer[2];
     struct rxBuf* readBufferPtr;
@@ -131,6 +130,10 @@ SRXL2Bus srxl2bus[SRXL2_MAX_BUSES] = {
 };
 
 static uint8_t telemetryFrame[22];
+uint32_t lastRepliedFrameTimeUs;
+uint16_t allBusFrameLosses;
+uint16_t holds;
+bool inHold;
 
 static void srxl2RxWriteData(const void *data, int len, SRXL2Bus *bus);
 
@@ -199,7 +202,6 @@ bool srxl2ProcessHandshake(const Srxl2Header* header, SRXL2Bus *bus)
 
 void srxl2ProcessChannelData(const Srxl2ChannelDataHeader* channelData, rxRuntimeState_t *rxRuntimeState, SRXL2Bus *bus) {
     bus->frameResult = RX_FRAME_COMPLETE;
-    bus->lastControlDataTimestamp = bus->lastIdleTimestamp;
 
     if (channelData->rssi >= 0) {
         const int rssiPercent = channelData->rssi;
@@ -490,6 +492,7 @@ static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus
             serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
             DEBUG_PRINTF("case SendHandshake: switching to %d baud on bus %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, busnum);
             bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+            bus->frameResult |= RX_FRAME_FAILSAFE;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
             bus->state = ListenForActivity;
@@ -509,6 +512,7 @@ static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus
             serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
             DEBUG_PRINTF("case ListenForHandshake: switching to %d baud on bus %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, busnum);
             bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+            bus->frameResult |= RX_FRAME_FAILSAFE;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
             bus->state = ListenForActivity;
@@ -522,6 +526,7 @@ static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus
             serialSetBaudRate(bus->serialPort, SRXL2_PORT_BAUDRATE_DEFAULT);
             DEBUG_PRINTF("case Running: switching to %d baud: %ld %ld on bus %d\r\n", SRXL2_PORT_BAUDRATE_DEFAULT, now, bus->lastValidPacketTimestamp, busnum);
             bus->timeoutTimestamp = now + SRXL2_LISTEN_FOR_ACTIVITY_TIMEOUT_US;
+            bus->frameResult |= RX_FRAME_FAILSAFE;
             result = (result & ~RX_FRAME_PENDING) | RX_FRAME_FAILSAFE;
 
             bus->state = ListenForActivity;
@@ -535,36 +540,56 @@ static uint8_t srxl2FrameStatusPerBus(rxRuntimeState_t *rxRuntimeState, SRXL2Bus
         result |= RX_FRAME_PROCESSING_REQUIRED;
     }
 
-    if ((result & RX_FRAME_COMPLETE) && !(result & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED))) {
-        rxRuntimeState->lastRcFrameTimeUs = bus->lastIdleTimestamp;
-    }
-
     return result;
 }
 
 static uint8_t srxl2FrameStatus(rxRuntimeState_t *rxRuntimeState)
 {
-    uint8_t result = RX_FRAME_FAILSAFE | RX_FRAME_DROPPED;
-    bool frameComplete = false;
+    uint8_t result = 0;
+    bool anyfailsafe = false;
     for (int i = 0; i < SRXL2_MAX_BUSES; i++) {
         if (srxl2bus[i].serialPort) {
-            uint8_t bus_result = srxl2FrameStatusPerBus(rxRuntimeState, &srxl2bus[i]);
-            // If any receiever requires frame processing, we ask for it.  If any receiver gets
-            // a complete frame with no issues, we report that (ignoring drops/failsafes).
-            // Otherwise, if any receiver drops or failsafes, we report that.
-            result |= bus_result & RX_FRAME_PROCESSING_REQUIRED;
-            if (!frameComplete) {
-                if ((bus_result & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED | RX_FRAME_COMPLETE)) == RX_FRAME_COMPLETE) {
-                    result &= ~(RX_FRAME_FAILSAFE | RX_FRAME_DROPPED);
-                    result |= RX_FRAME_COMPLETE;
-                    frameComplete = true;
-                } else {
-                    result |= bus_result &
-                        (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED | RX_FRAME_COMPLETE);
-                }
+            uint8_t cur_result = srxl2FrameStatusPerBus(rxRuntimeState, &srxl2bus[i]);
+            // If any receiever requires frame processing, we ask for it.
+            result |= cur_result & RX_FRAME_PROCESSING_REQUIRED;
+            anyfailsafe |= !!(cur_result & RX_FRAME_FAILSAFE);
+            // If we got a new frame, update last frame time.
+            if ((cur_result & RX_FRAME_COMPLETE) && !(cur_result & (RX_FRAME_FAILSAFE | RX_FRAME_DROPPED))) {
+                rxRuntimeState->lastRcFrameTimeUs = srxl2bus[i].lastIdleTimestamp;
+                lastRepliedFrameTimeUs = srxl2bus[i].lastIdleTimestamp;
+                result |= RX_FRAME_COMPLETE;
+                inHold = false;
+                DEBUG_PRINTF("Got a new frame at %ld result: %x\r\n", lastRepliedFrameTimeUs, result);
             }
-            result &= (~(RX_FRAME_FAILSAFE | RX_FRAME_DROPPED)) | bus_result;
         }
+    }
+    // We missed a frame.
+    uint32_t now = micros();
+    if (lastRepliedFrameTimeUs == 0) {
+        if (anyfailsafe) {
+            result |= RX_FRAME_FAILSAFE;
+            DEBUG_PRINTF("Haven't received anything yet, reporting failsafe at %ld\r\n", now);
+        }
+    } else if (lastRepliedFrameTimeUs &&
+        now > lastRepliedFrameTimeUs + SRXL2_FRAME_PERIOD_US + SRXL2_SAME_FRAME_US) {
+        lastRepliedFrameTimeUs += SRXL2_FRAME_PERIOD_US;
+        allBusFrameLosses++;
+        bool allfailsafe = true;
+        for (int i = 0; allfailsafe && i < SRXL2_MAX_BUSES; i++) {
+            if (srxl2bus[i].serialPort && !(srxl2bus[i].frameResult & RX_FRAME_FAILSAFE)) {
+                allfailsafe = false;
+                result |= RX_FRAME_DROPPED;
+            }
+        }
+        if (allfailsafe) {
+            result |= RX_FRAME_FAILSAFE;
+            if (!inHold)
+                holds++;
+            inHold = true;
+        }
+
+        DEBUG_PRINTF("Missed a frame, expected at %ld fs: %d result: %x\r\n",
+                     lastRepliedFrameTimeUs, allfailsafe, result);
     }
     return result;
 }
@@ -830,6 +855,12 @@ void srxl2FinalizeFrame(sbuf_t *dst)
       data2++;
       if (*data2 == 0xFFFF && srxl2bus[1].serialPort)
           *data2 = __htons(srxl2bus[1].frameLosses);
+      data2++;
+      if (*data2 == 0xFFFF)
+          *data2 = __htons(allBusFrameLosses);
+      data2++;
+      if (*data2 == 0xFFFF)
+          *data2 = __htons(holds);
   }
   srxl2RxWriteData(sbufPtr(dst), sbufBytesRemaining(dst) + 2, &srxl2bus[SRXL2_PRIMARY_BUS]);
   srxl2bus[SRXL2_PRIMARY_BUS].telemetryRequested = false;
